@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "visual-explainer-skills",
+  "description": "Agent skills for building animated and interactive visual explainers.",
+  "owner": { "name": "k-sandhu" },
+  "plugins": [
+    {
+      "name": "visual-explainers",
+      "description": "Seven skills for animated and interactive explainers: plan the message, pick the form, build on a small SVG engine, check the layout at phone width, record GIF/MP4.",
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/k-sandhu/visual-explainer-skills"
+    }
+  ]
+}
