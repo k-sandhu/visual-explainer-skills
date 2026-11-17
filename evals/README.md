@@ -21,4 +21,4 @@ instead of installed.
 
 To compare, run each case once with the skills and once without, from the same prompt and data, then
 check each result at phone width (`skills/explainer-kit/scripts/render_check.py`) and compare the two
-versions side by side without knowing which is which. The results of three rounds are in the main README.
+versions side by side without knowing which is which. The results of four rounds are in the main README.

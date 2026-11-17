@@ -143,37 +143,37 @@ in a browser and rated each 1 to 5 on message, accuracy, engagement, craft and f
 After each round the reviewers' complaints went into the skills and the five were rebuilt, always against
 the same builds made without the skills.
 
-| Case | Round 1 | Round 2 | Round 3 | Round 3 score, with / without |
-|---|---|---|---|---|
-| guardrail-gates | Without | Without | Without | 20 / 23 |
-| handoff-timelines | With | With | With | 24 / 16 |
-| invoice-checks | With | Without | With | 24 / 19 |
-| sql-safety-units | Without | Without | Without | 21 / 22 |
-| forecast-guess | With | With | With | 23 / 20 |
-| Wins with the skills | 3 of 5 | 2 of 5 | 3 of 5 | 112 / 100 |
+| Case | Round 1 | Round 2 | Round 3 | Round 4 | Round 4 score, with / without |
+|---|---|---|---|---|---|
+| guardrail-gates | Without | Without | Without | With | 22 / 21 |
+| handoff-timelines | With | With | With | With | 24 / 16 |
+| invoice-checks | With | Without | With | With | 22 / 21 |
+| sql-safety-units | Without | Without | Without | With | 22 / 21 |
+| forecast-guess | With | With | With | With | 23 / 21 |
+| Wins with the skills | 3 of 5 | 2 of 5 | 3 of 5 | 5 of 5 | 113 / 100 |
 
-The skills won 8 of 15 blind comparisons, and their summed review score was higher in every round (110 to
-105, 109 to 103, 112 to 100). Automatic checks passed 54 of 55 with the skills in each round and 48 of 55
-without.
+The skills won 13 of 20 blind comparisons, and their summed review score was higher in every round (110 to
+105, 109 to 103, 112 to 100, 113 to 100). Automatic checks passed 54 of 55 with the skills in each round and
+48 of 55 without.
 
 What that means in practice:
 
 - The skills make phone layout reliable. With them, no build had tiny text, sideways scrolling or controls
-  that jumped. The replay won all three rounds; the version made without the skills put its timeline in a
+  that jumped. The replay won all four rounds; the version made without the skills put its timeline in a
   sideways-scrolling box where most of the action happened off screen.
 - Giving an explorable's result in the reader's own units (a monthly bill at a volume the reader picks) won
   back the invoice case after it had been lost.
-- Two cases lost every round, and they point at what the skills do not yet do well. A lesson's question step
-  should mark the reader's answer right or wrong and give each case its own question; the skills' version
-  waited for the guess but gave the same feedback whatever was picked. A social-feed visual should be a
-  fixed-size card that reads without tapping, and should show a control result (here, that the models still
-  answered ordinary questions, so a clean score was not a refusal).
+- Two cases lost three rounds running and drew level after the skills were changed to cover what they lacked. A lesson's
+  question step now marks the reader's answer "Right" or "Not quite" and gives each case its own question;
+  before, it waited for the guess but gave the same feedback whatever was picked. A social-feed visual is now a
+  fixed-size card that reads without tapping and shows a control result (here, that the models still answered
+  ordinary questions, so a clean score was not a refusal). Both then won by one point.
 
-With one build per condition per round, the 8-of-15 split could easily move either way. The reviewer is a
-model too, and it scored the same unchanged page differently across rounds (21, 21, then 19), so a
-difference of one or two points is noise. Read the results as a map of what the skills change, not a
-measurement of how much. The builds, grades and verdicts are in the
-[experiment-notebooks](https://github.com/k-sandhu/experiment-notebooks) repository under
+With one build per condition per round, the 13-of-20 split could easily move either way. The reviewer is a
+model too, and it scored the same unchanged page differently across rounds (23, 23, 23, then 21), so a
+difference of one or two points is noise, and three of the five round-4 wins are by one point. Read the
+results as a map of what the skills change, not a measurement of how much. The builds, grades and verdicts
+are in the [experiment-notebooks](https://github.com/k-sandhu/experiment-notebooks) repository under
 `visual-skills-workspace/`.
 
 ## Background
