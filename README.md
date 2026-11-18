@@ -82,7 +82,8 @@ were built around:
 - "I need a LinkedIn visual: 0 failures in 29 tries doesn't prove it's safe. Be honest about the uncertainty."
 - "Make something engaging about how hard it is to beat 'repeat last week' in forecasting."
 
-The director picks the form; you do not need to name one.
+The director picks the form; you do not need to name one. Add your brand colours or fonts to the request
+if the piece should carry them.
 
 ## What the kit does for the model
 
@@ -98,9 +99,28 @@ The director picks the form; you do not need to name one.
 - `record.py` plays every step with its scripted demo taps and writes a sharp MP4 and a GIF, shrinking the
   GIF under about 10 MB.
 
-Four styles: `chalkboard` (charcoal board, handwriting), `paper`, `editorial` and `blueprint`. The data
-colours of each were checked for colour-blind separation; the chalkboard pastels failed that check as data
-colours, so the kit keeps them for lines and text and uses stronger fills for data.
+Four styles: `chalkboard` (charcoal board, handwriting), `paper`, `editorial` and `blueprint`.
+
+### Your own colours and fonts
+
+For a piece that carries a brand, give the model your colours and fonts ("use our colours #0F6E8C and
+#B87400 and the font Inter"). It writes them into a small theme file and builds with
+`scaffold.py --theme brand.json` instead of a built-in style. The theme overrides any colour or font of a
+base style and keeps the colour names, so every explainer works with any theme. The format, an example
+and what each colour means are in
+[`skills/explainer-kit/references/themes.md`](skills/explainer-kit/references/themes.md).
+
+`check_theme.py` checks a theme before it is used: text contrast against the background, whether bars and
+dots stand out, and whether neighbouring data colours stay apart for readers with each common kind of
+colour blindness. A theme that fails is refused unless forced, and the model tells you which of your
+colours caused it.
+
+The built-in styles pass the same check when their data colours are compared as neighbours in the order
+they are assigned (blue, amber, green, violet, red). Pairs that are not neighbours can look alike: in every
+style, the blue and violet fills are hard to tell apart for red-green colour-blind readers, and amber and
+red (dark styles) or green and red (light styles) come close. A chart that uses both colours of such a pair
+should label its marks. The chalkboard pastels failed the check as data colours, so the kit keeps them for
+lines and text and uses stronger fills for data.
 
 ## Examples
 
