@@ -1,7 +1,7 @@
 {
   "name": "visual-explainers",
   "description": "Seven skills that turn a finding, a process or a dataset into an animated or interactive explainer a newcomer can follow on a phone: step-by-step lessons, replays of agent runs, what-if models, every-item-is-a-dot charts and guess-then-reveal, with a render check and a GIF/MP4 recorder.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "k-sandhu" },
   "homepage": "https://github.com/k-sandhu/visual-explainer-skills",
   "repository": "https://github.com/k-sandhu/visual-explainer-skills",

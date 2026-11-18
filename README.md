@@ -115,11 +115,10 @@ dots stand out, and whether neighbouring data colours stay apart for readers wit
 colour blindness. A theme that fails is refused unless forced, and the model tells you which of your
 colours caused it.
 
-The built-in styles pass the same check when their data colours are compared as neighbours in the order
-they are assigned (blue, amber, green, violet, red). Pairs that are not neighbours can look alike: in every
-style, the blue and violet fills are hard to tell apart for red-green colour-blind readers, and amber and
-red (dark styles) or green and red (light styles) come close. A chart that uses both colours of such a pair
-should label its marks. The chalkboard pastels failed the check as data colours, so the kit keeps them for
+In all four built-in styles, every pair of the five data colours passes the same check: they stay apart
+for readers with each common kind of colour blindness, not only when compared as neighbours. Version
+0.4.0 re-tuned them for this; before, the blue and violet fills looked almost the same to red-green
+colour-blind readers. The chalkboard pastels failed the check as data colours, so the kit keeps them for
 lines and text and uses stronger fills for data.
 
 ## Examples
