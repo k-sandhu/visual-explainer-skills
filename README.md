@@ -1,26 +1,27 @@
 # Visual explainer skills
 
-Seven agent skills that teach a model to turn a finding, a process or a dataset into an animated or
-interactive explainer that a newcomer can follow on a phone: a step-by-step lesson, a replay of a real
-agent run, a what-if model to play with, a chart where every item is a dot, or a guess-then-reveal.
+Seven agent skills that teach an AI assistant to turn a finding, a process or a dataset into an animated or
+interactive explainer that a newcomer can follow: a step-by-step lesson, a replay of a real run, a what-if
+model to play with, a chart where every item is a dot, a guess-then-reveal, or a single figure for an article.
+Each explainer opens with the situation in plain words before any data, and lays itself out for a laptop or a
+phone.
 
-**[See the example gallery](https://k-sandhu.github.io/visual-explainer-skills/)**: 25 explainers built with the
-skills from real experiment data, grouped by form, with one live example per form.
+**[Gallery](https://k-sandhu.github.io/visual-explainer-skills/)**: 25 explainers built with the skills from real
+experiment data. **[Setup](https://k-sandhu.github.io/visual-explainer-skills/setup.html)**: coding agents and chat apps.
 
 ![A chalkboard lesson built with the skills: small coding agents remove their safety monitor, report it, then say it is still on when asked directly](examples/28-monitor-removal-honesty/explainer.gif)
 
-The skills are plain folders in the [Agent Skills](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview)
-format: a `SKILL.md` with a name and a description that tells the model when to use it, plus scripts and
-references it reads only when needed. They work in Claude Code, on claude.ai, and in any agent that can read
-files and run Python.
+The skills are plain folders in the open [Agent Skills](https://agentskills.io) format: a `SKILL.md` with a
+name and a description that tells the model when to use it, plus scripts and references it reads only when
+needed. Any assistant that can read files can follow them; the checks need one that can also run Python.
 
 ## The skills
 
 | Skill | What it does | Use it when the reader must grasp... |
 |---|---|---|
-| [explainer-director](skills/explainer-director/SKILL.md) | Finds the one message, picks the form, writes a storyboard with one idea per step, and runs an honesty check | Always first |
+| [explainer-director](skills/explainer-director/SKILL.md) | Finds the one message, writes the opening for a newcomer, picks the form, writes a storyboard with one idea per step, and runs an honesty check | Always first |
 | [explainer-kit](skills/explainer-kit/SKILL.md) | The engine, four styles, a scaffold script, a render check and a GIF/MP4 recorder | Always, to build and check |
-| [stepper-lesson](skills/stepper-lesson/SKILL.md) | Khan Academy style lesson with Next, captions and one or two hands-on steps | How something works, one concept at a time |
+| [stepper-lesson](skills/stepper-lesson/SKILL.md) | Lesson with Next, captions and one or two hands-on steps | How something works, one concept at a time |
 | [system-replay](skills/system-replay/SKILL.md) | Replays recorded traces on a scrubbable timeline, or walks through a designed run | What happened between several actors over time |
 | [explorable-model](skills/explorable-model/SKILL.md) | A live model the reader steers with a slider, with linked views and the break-even marked | How an outcome depends on a price, threshold or rate |
 | [unit-story](skills/unit-story/SKILL.md) | Every item is a dot; dots regroup by model and outcome; small-sample uncertainty shown with intervals and simulated samples | How many items landed where, and how sure we can be |
@@ -30,7 +31,7 @@ How they fit together:
 
 ```mermaid
 flowchart LR
-    req[Request + data] --> dir[explainer-director<br/>message, form, storyboard]
+    req[Request + data] --> dir[explainer-director<br/>message, opening, form, storyboard]
     dir --> form{Form skill}
     form --> s1[stepper-lesson]
     form --> s2[system-replay]
@@ -43,28 +44,20 @@ flowchart LR
 
 ## Installing
 
-### Claude Code
+The [setup page](https://k-sandhu.github.io/visual-explainer-skills/setup.html) has step-by-step instructions
+for each tool. In short:
 
-Add this repository as a plugin marketplace and install the plugin:
+| You use | Do this |
+|---|---|
+| A coding agent (Claude Code, Codex, Cursor, Gemini CLI or Antigravity, GitHub Copilot in VS Code, OpenCode) | Clone this repository and run `python scripts/install.py <tool>`; it copies the seven folders to the place that tool reads (add `--project DIR` for one project) |
+| A chat app with skills (ChatGPT on business plans, Claude, Gemini) | Upload `visual-explainers.zip` from the [latest release](https://github.com/k-sandhu/visual-explainer-skills/releases/latest): one combined skill |
+| Any other chatbot | Attach `visual-explainers-for-chat.md` from the latest release to the chat, then view the result in the chat's preview or paste it into the [player page](https://k-sandhu.github.io/visual-explainer-skills/play.html) |
 
-```
-/plugin marketplace add k-sandhu/visual-explainer-skills
-/plugin install visual-explainers@visual-explainer-skills
-```
+Claude Code can also install it as a plugin: `/plugin marketplace add k-sandhu/visual-explainer-skills`,
+then `/plugin install visual-explainers@visual-explainer-skills`.
 
-Or copy the seven folders under `skills/` into `~/.claude/skills/` (all projects) or a project's
-`.claude/skills/`.
-
-### claude.ai
-
-Run `python scripts/package_zips.py` to write one zip per skill to `dist/` (each zip holds the skill folder at
-its root), or download the zips from the latest release. Upload each under Settings → Capabilities → Skills.
-Ask for a "chat widget" to get the explainer inline in the conversation.
-
-### Other agents
-
-Point the agent's instructions file at the `skills/` folder and tell it to read
-`explainer-director/SKILL.md` before building any visual explainer.
+`python scripts/package_zips.py` rebuilds the zips (one per skill, plus the combined one, with descriptions
+cut to the 200 characters chat apps allow) and `python scripts/build_chat_pack.py` rebuilds the chat file.
 
 ### Requirements
 
@@ -79,7 +72,7 @@ skipped.
 Give the model your data or a description and ask for what you want in plain words. Some requests the skills
 were built around:
 
-- "Make a short Khan Academy style lesson for non-engineers on why this permission check can be tricked."
+- "Make a short lesson for non-engineers on why this permission check can be tricked."
 - "Replay these agent traces so a reader sees who waited for whom."
 - "Build an interactive for finance managers: when does the cheaper option pay off? Let them change the price."
 - "I need a LinkedIn visual: 0 failures in 29 tries doesn't prove it's safe. Be honest about the uncertainty."
@@ -91,13 +84,14 @@ if the piece should carry them.
 ## What the kit does for the model
 
 - `scaffold.py` writes a self-contained HTML file with the engine inlined, so the model writes only the
-  scene and never retypes boilerplate. `--fragment` produces a claude.ai chat widget instead of a page.
-- `kit.js` (window.K): hand-drawn shapes with fixed wobble, draw-in reveals in reading order, travelling
+  scene and never retypes boilerplate. `--fragment` produces a snippet for a chat app's widget instead of a page.
+- `kit.js` (window.K): a layout that puts the drawing beside the text on a laptop and stacks them on a phone,
+  an `intro` opening scene for newcomers, hand-drawn shapes with fixed wobble, draw-in reveals in reading order, travelling
   dots, pulse rings, counters, a stepper whose Back/Next never move, a scrubbable timeline player for
   replays that pauses at the end of each part long enough to read its caption and has a speed control,
   standalone one-view figures (`--kind figure`) with no Next or Back, unit-chart motion that keeps each item's identity, sliders, Wilson intervals, reduced-motion
   support, and a `window.EXPLAINER` hook that the scripts use to drive any explainer.
-- `render_check.py` opens the page at 360 px and 560 px, walks every step, saves frames and contact
+- `render_check.py` opens the page at 360 px (phone) and 1100 px (laptop), walks every step, saves frames and contact
   sheets, and fails on console errors, sideways scrolling, text outside the drawing, controls that move,
   and blank frames. It warns on overlapping, small (under 11 px) or faint text (contrast measured from the
   pixels), clipped text, blank bands and height changes. It also uses each step like a reader: sets every
@@ -135,18 +129,19 @@ lines and text and uses stronger fills for data.
 
 [`examples/`](examples/) holds 25 explainers built with the skills, most from the experiments in
 [experiment-notebooks](https://github.com/k-sandhu/experiment-notebooks), each from the notebook's README and
-data, with no human edits to the explainers. Browse them in the [gallery](https://k-sandhu.github.io/visual-explainer-skills/), or download a folder and open
-`explainer.html` in a browser. Some come from the skills' test rounds and were built with an earlier version
-of the kit.
+data. Each opens with a plain introduction to its situation, added in version 0.7 by a separate pass that
+followed the new opening rule. Browse them in the [gallery](https://k-sandhu.github.io/visual-explainer-skills/),
+where every example has its own page with a short introduction, or download a folder and open
+`explainer.html` in a browser.
 
 | Form | Skill | Examples |
 |---|---|---|
 | [Step-by-step lessons](https://k-sandhu.github.io/visual-explainer-skills/#lesson) | stepper-lesson | 7 |
 | [Replays of real runs](https://k-sandhu.github.io/visual-explainer-skills/#replay) | system-replay | 5 |
-| [Explorable models](https://k-sandhu.github.io/visual-explainer-skills/#explorable) | explorable-model | 3 |
-| [Every item is a dot](https://k-sandhu.github.io/visual-explainer-skills/#units) | unit-story | 4 |
-| [Guess, then reveal](https://k-sandhu.github.io/visual-explainer-skills/#guess) | predict-reveal | 4 |
-| [Standalone figures](https://k-sandhu.github.io/visual-explainer-skills/#figure) | explainer-kit (`--kind figure`) | 2 |
+| [What-if models](https://k-sandhu.github.io/visual-explainer-skills/#explorable) | explorable-model | 3 |
+| [Every item a dot](https://k-sandhu.github.io/visual-explainer-skills/#units) | unit-story | 4 |
+| [Guess, then see](https://k-sandhu.github.io/visual-explainer-skills/#guess) | predict-reveal | 4 |
+| [Single figures](https://k-sandhu.github.io/visual-explainer-skills/#figure) | explainer-kit (`--kind figure`) | 2 |
 
 ![An explorable built with the skills: move the share of tasks that always give the same result and see when stopping after two agreeing tries pays off](examples/27-adaptive-knowledge-rollouts/explainer.gif)
 
@@ -187,7 +182,7 @@ The skills won 13 of 20 blind comparisons, and their summed review score was hig
 
 What that means in practice:
 
-- The skills make phone layout reliable. With them, no build had tiny text, sideways scrolling or controls
+- The skills make the layout reliable. With them, no build had tiny text, sideways scrolling or controls
   that jumped. The replay won all four rounds; the version made without the skills put its timeline in a
   sideways-scrolling box where most of the action happened off screen.
 - Giving an explorable's result in the reader's own units (a monthly bill at a volume the reader picks) won
@@ -204,6 +199,16 @@ difference of one or two points is noise, and three of the five round-4 wins are
 results as a map of what the skills change, not a measurement of how much. The builds, grades and verdicts
 are in the [experiment-notebooks](https://github.com/k-sandhu/experiment-notebooks) repository under
 `visual-skills-workspace/`.
+
+### In other tools and models
+
+On 24 November 2026 the same request (a made-up bakery's 60 orders: did the new app cut waiting times?) went to
+five setups, once each. Claude Code with Claude Sonnet 5.5 and with Claude Haiku 5.5, Codex with GPT-6.1 Sol, and
+OpenCode with the open-weight Kimi K3.1 Pro each found the skills in the folder `install.py` uses, opened with the
+situation in plain words and showed every number correctly. The open-weight DeepSeek V4.1 Flash, given only the chat
+file and no tools, built a working seven-step page with the right averages but one guess step based on its own wrong
+mental arithmetic. One run per setup shows that each can work, not how often. Details, times and costs are on the
+[setup page](https://k-sandhu.github.io/visual-explainer-skills/setup.html#models).
 
 ## Background
 

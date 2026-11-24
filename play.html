@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Explainer player</title>
+<meta name="description" content="Paste the explainer code a chatbot wrote, run it, and save it as one HTML file that works offline.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site/site.css">
+<style>
+.paste { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px }
+textarea { width: 100%; min-height: 260px; resize: vertical; background: #0C0D0F; color: var(--ink); border: 1px solid var(--line-2); border-radius: 12px; padding: 14px 16px; font: 13px/1.5 var(--mono); tab-size: 2 }
+.status { font-size: 14px; color: var(--mut); min-height: 22px }
+.status.err { color: var(--red) }
+.steps3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 26px 0 0; padding: 0; list-style: none }
+.steps3 li { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 14.5px; color: var(--ink-2) }
+.steps3 b { display: block; color: var(--ink); font-size: 15px; margin-bottom: 4px }
+@media (max-width: 760px) { .steps3 { grid-template-columns: minmax(0, 1fr) } }
+#out { margin-top: 22px }
+</style>
+</head><body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="./"><b>Visual explainers</b><span>skills for AI assistants</span></a>
+  <nav aria-label="Site"><a href="./#gallery">Gallery</a><a class="wide" href="./#how">How it works</a><a href="setup.html">Set up</a><a href="play.html" aria-current="page">Player</a><a class="wide" href="https://github.com/k-sandhu/visual-explainer-skills">GitHub</a></nav>
+</div></header>
+
+<main>
+<section style="padding-bottom:28px"><div class="wrap">
+  <p class="kicker">For chat apps</p>
+  <h1>Run an explainer a chatbot wrote</h1>
+  <p class="lede" style="margin-top:14px">If you use the <a href="setup.html#chat">chat file</a> in a chatbot that cannot show HTML, or cannot load the
+    explainer engine, paste its code here. The page runs it with the engine and can save a single HTML file that
+    opens in any browser, offline, with nothing else to install.</p>
+  <ol class="steps3">
+    <li><b>1. Copy</b>Copy the whole HTML code block from the chat, or only the part inside the last <code>&lt;script&gt;</code>.</li>
+    <li><b>2. Paste and run</b>Paste it below and press Run. Errors show under the box.</li>
+    <li><b>3. Save</b>Press Save to get one file you can share, put on a website or attach to an email.</li>
+  </ol>
+</div></section>
+
+<section style="padding-top:0;border-top:0"><div class="wrap">
+  <div class="paste">
+    <label for="code" class="mut" style="font-size:14px">Code from the chat</label>
+    <textarea id="code" spellcheck="false" placeholder="Paste the HTML page or the scene script here"></textarea>
+    <div class="row">
+      <button class="btn pri" id="run" type="button">Run</button>
+      <button class="btn" id="save" type="button" disabled>Save as one HTML file</button>
+      <button class="btn" id="sample" type="button">Load a small example</button>
+    </div>
+    <p class="status" id="status" role="status"></p>
+  </div>
+  <div id="out" hidden><div class="frame"><iframe id="view" title="Your explainer" sandbox="allow-scripts"></iframe></div></div>
+</div></section>
+</main>
+
+<footer><div class="wrap"><span>Runs in your browser; nothing you paste is sent anywhere.</span><span><a href="./">Back to the gallery</a></span></div></footer>
+
+<script>
+const KIT_PATH = 'skills/explainer-kit/assets/kit.js';
+const KIT_CDN = 'https://cdn.jsdelivr.net/gh/k-sandhu/visual-explainer-skills@main/skills/explainer-kit/assets/kit.js';
+let kitText = null;
+fetch(KIT_PATH).then(r => r.ok ? r.text() : null).then(t => { kitText = t; }).catch(() => {});
+
+const $ = id => document.getElementById(id);
+const status = (msg, err) => { $('status').textContent = msg; $('status').className = 'status' + (err ? ' err' : ''); };
+
+/* Accept a whole page or just the scene. Keep the inline scripts (the engine is supplied here), the title
+   and the page background. */
+function parse(src) {
+  src = src.trim().replace(/^```[a-z]*\s*\n/i, '').replace(/\n```\s*$/, '');
+  if (!/<script[\s>]/i.test(src)) return { scene: src, title: 'Explainer', bg: '#141517', dark: true };
+  const doc = new DOMParser().parseFromString(src, 'text/html');
+  const scripts = [...doc.querySelectorAll('script')].filter(s => !s.src && !/explainer-kit v1/.test(s.textContent));
+  const css = [...doc.querySelectorAll('style')].map(s => s.textContent).join('\n');
+  const bg = (css.match(/background(?:-color)?\s*:\s*(#[0-9a-f]{3,8})/i) || [])[1] || '#141517';
+  const extraCss = [...doc.querySelectorAll('style')].map(s => s.textContent).filter(t => !/html\s*,\s*body/.test(t)).join('\n');
+  const body = doc.body ? doc.body.cloneNode(true) : null;
+  if (body) body.querySelectorAll('script').forEach(s => s.remove());
+  return { scene: scripts.map(s => s.textContent).join('\n'), title: (doc.title || 'Explainer').trim(), bg,
+           dark: !/color-scheme\s*:\s*light/.test(css), css: extraCss, body: body ? body.innerHTML.trim() : '<div id="x"></div>' };
+}
+
+function page(p, inline, forPreview) {
+  const kit = inline && kitText ? `<script>\n${kitText.trim()}\n<\/script>` : `<script src="${KIT_CDN}"><\/script>`;
+  const fit = forPreview ? `<script>(function(){const send=()=>{const k=[...document.body.children].filter(e=>e.tagName!=='SCRIPT');const h=Math.max(200,...k.map(e=>e.getBoundingClientRect().bottom+scrollY))+24;parent.postMessage({kxh:Math.ceil(h)},'*')};new ResizeObserver(send).observe(document.body);addEventListener('load',send);setInterval(send,1000)})();<\/script>` : '';
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${p.title.replace(/</g, '&lt;')}</title>
+<style>:root{color-scheme:${p.dark ? 'dark' : 'light'}}html,body{margin:0;background:${p.bg}}body{padding:16px;box-sizing:border-box}</style>
+${p.css ? `<style>${p.css}</style>` : ''}
+</head><body>
+${p.body || '<div id="x"></div>'}
+${kit}
+<script>
+${p.scene}
+<\/script>
+${fit}
+</body></html>`;
+}
+
+let last = null;
+$('run').onclick = () => {
+  const src = $('code').value;
+  if (!src.trim()) { status('Paste some code first.', true); return; }
+  try { last = parse(src); } catch (e) { status('Could not read that code: ' + e.message, true); return; }
+  if (!/K\.(stepper|player|figure)\s*\(/.test(last.scene)) status('Running it, but I could not find K.stepper, K.player or K.figure in the code, so it may show nothing.', true);
+  else status(kitText ? 'Running.' : 'Running, with the engine loaded from the CDN.');
+  $('out').hidden = false; $('view').style.height = '640px';
+  $('view').srcdoc = page(last, true, true);
+  $('save').disabled = false;
+};
+addEventListener('message', e => { if (e.source === $('view').contentWindow && e.data && e.data.kxh) $('view').style.height = e.data.kxh + 'px'; });
+$('save').onclick = () => {
+  if (!last) return;
+  const html = page(last, true, false);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  a.download = (last.title || 'explainer').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.html';
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  status(kitText ? 'Saved. The file has the engine inside it and works offline.' : 'Saved. The engine could not be read here, so the file loads it from the CDN and needs a connection.');
+};
+$('sample').onclick = () => { $('code').value = SAMPLE; $('run').click(); };
+
+const SAMPLE = `const {P, T, line, rect, arrow} = K;
+// A small two-step lesson, illustrative numbers.
+K.stepper({
+  root: '#x', style: 'chalkboard', viewBox: [380, 280],
+  title: 'A short example lesson about a queue at a bakery counter.',
+  intro: { title: 'A queue at the counter', start: 'Start',
+    cap: 'A bakery takes orders at one counter. When customers arrive faster than orders are made, a queue grows. How long does the last customer wait?',
+    draw: () => P(rect(30, 90, 110, 70, 1), 'amber', 0, 600) + T(85, 130, 'Customers', {h: 1, z: 20, c: 'amber', t: 300}) +
+      P(line(150, 125, 220, 125, 2), 'mut', 700, 300) + P(arrow(150, 125, 220, 125, 3), 'mut', 1000, 150) +
+      P(rect(230, 90, 120, 70, 4), 'blue', 1100, 600) + T(290, 130, 'Counter', {h: 1, z: 20, c: 'blue', t: 1400}) +
+      T(190, 220, 'Who waits, and for how long?', {h: 1, z: 22, t: 1800}) },
+  steps: [
+    { title: '1. One every 2 minutes', cap: 'A customer arrives every 3 minutes and each order takes 2. Nobody waits.',
+      draw: () => T(190, 140, 'wait: 0 min', {h: 1, z: 34, c: 'green'}) },
+    { title: '2. One every minute', cap: 'Now a customer arrives every minute and orders still take 2. The tenth customer waits 9 minutes (illustrative).',
+      draw: () => T(190, 140, 'wait: 9 min', {h: 1, z: 34, c: 'red'}) },
+  ],
+});`;
+</script>
+</body></html>

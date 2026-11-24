@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up the skills</title>
+<meta name="description" content="How to use the visual explainer skills in coding agents (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, OpenCode) and chat apps (ChatGPT, Claude, Gemini, others).">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site/site.css">
+<style>
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 48px; align-items: start }
+.toc { position: sticky; top: 84px; font-size: 14.5px }
+.toc p { margin: 14px 0 6px; color: var(--mut); font-size: 12.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600 }
+.toc a { display: block; color: var(--ink-2); text-decoration: none; padding: 4px 0 4px 12px; border-left: 2px solid var(--line) }
+.toc a:hover { color: var(--ink); border-color: var(--mut) }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); gap: 0 } .toc { display: none } }
+.doc h2 { margin: 0 0 12px; scroll-margin-top: 80px }
+.doc h3 { margin: 30px 0 8px; scroll-margin-top: 80px; font-size: 21px }
+.doc h4 { margin: 18px 0 6px; font-size: 15.5px }
+.doc p, .doc li { color: var(--ink-2); max-width: 76ch }
+.doc ul, .doc ol { padding-left: 20px } .doc li { margin: 5px 0 }
+.block { padding: 6px 0 46px; border-bottom: 1px solid var(--line); margin-bottom: 46px }
+.block:last-child { border-bottom: 0 }
+.tool { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 4px 24px 20px; margin: 18px 0 }
+@media (max-width: 720px) { .tool { padding: 2px 16px 16px } }
+.tool h3 { margin-top: 18px }
+.note { font-size: 14px; color: var(--mut) }
+.quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 22px 0 0 }
+@media (max-width: 760px) { .quick { grid-template-columns: minmax(0, 1fr) } }
+.ok { color: var(--green) } .partly { color: var(--amber) } .no { color: var(--red) }
+</style>
+</head><body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="./"><b>Visual explainers</b><span>skills for AI assistants</span></a>
+  <nav aria-label="Site"><a href="./#gallery">Gallery</a><a class="wide" href="./#how">How it works</a><a href="setup.html" aria-current="page">Set up</a><a href="play.html">Player</a><a class="wide" href="https://github.com/k-sandhu/visual-explainer-skills">GitHub</a></nav>
+</div></header>
+
+<main><section style="padding-top:48px"><div class="wrap layout">
+<nav class="toc" aria-label="On this page">
+  <p>Start</p><a href="#which">Which setup to use</a><a href="#get">Get the files</a>
+  <p>Coding agents</p><a href="#claude-code">Claude Code</a><a href="#codex">Codex</a><a href="#cursor">Cursor</a><a href="#gemini-cli">Gemini CLI and Antigravity</a><a href="#copilot">GitHub Copilot</a><a href="#opencode">OpenCode</a>
+  <p>Chat apps</p><a href="#chatgpt">ChatGPT</a><a href="#claude-app">Claude</a><a href="#gemini-app">Gemini</a><a href="#other-chat">Other chatbots</a>
+  <p>After setup</p><a href="#models">Which model</a><a href="#asking">Asking for an explainer</a>
+</nav>
+
+<div class="doc">
+<div class="block" id="which">
+  <p class="kicker">Set up</p>
+  <h1 style="margin-bottom:16px">Use the skills in your tool</h1>
+  <p class="lede">The skills are plain folders of instructions in the open Agent Skills format, plus a small drawing
+    engine and a few Python scripts. Most AI tools can now read them. Pick the row that matches how you work.</p>
+  <div class="tablewrap" style="margin-top:24px"><table>
+    <thead><tr><th>You use</th><th>What to install</th><th>What you get</th></tr></thead>
+    <tbody>
+      <tr><td>A coding agent on your computer</td><td>The seven skill folders, copied by one command</td><td>The full workflow: plan, build, a check at phone and laptop sizes, GIF and video recording</td></tr>
+      <tr><td>A chat app that supports skills</td><td>One combined skill, <code>visual-explainers.zip</code></td><td>Plan and build; the check runs only where the app can install a browser</td></tr>
+      <tr><td>Any other chatbot</td><td>One file, <code>visual-explainers-for-chat.md</code>, attached to the chat</td><td>Plan and build; you view the result in the chat's preview or the <a href="play.html">player page</a></td></tr>
+    </tbody></table></div>
+  <p class="note" style="margin-top:12px">Folder locations and menu names below come from each tool's documentation, checked on 24 November 2026. Tools change these often; if a path does not work, search the tool's docs for "skills".</p>
+</div>
+
+<div class="block" id="get">
+  <h2>Get the files</h2>
+  <p>For a coding agent, clone the repository and run the installer with your tool's name. It copies the seven skill folders
+    to the place that tool reads, for every project, or for one project with <code>--project</code>.</p>
+<pre><code>git clone https://github.com/k-sandhu/visual-explainer-skills
+cd visual-explainer-skills
+python scripts/install.py codex
+# tools: agents, antigravity, claude-code, codex, copilot, cursor, gemini-cli, opencode
+python scripts/install.py cursor --project ~/my-app   # one project only</code></pre>
+  <p>Without Python, copy the seven folders inside <code>skills/</code> into the folder listed for your tool below.</p>
+  <h4>For the checks and recordings</h4>
+  <p>The explainers themselves need nothing. The page check and the GIF recorder need Python 3.10 or later and a headless browser:</p>
+<pre><code>pip install playwright pillow
+playwright install chromium
+# optional, for GIF and MP4: ffmpeg on your PATH</code></pre>
+  <p>Without them the agent can still build an explainer, and the skills tell it to say which checks it skipped.</p>
+  <h4>For chat apps</h4>
+  <p>Download from the <a href="https://github.com/k-sandhu/visual-explainer-skills/releases/latest">latest release</a>:
+    <a href="https://github.com/k-sandhu/visual-explainer-skills/releases/latest/download/visual-explainers.zip"><code>visual-explainers.zip</code></a> (one skill to upload) and
+    <a href="https://github.com/k-sandhu/visual-explainer-skills/releases/latest/download/visual-explainers-for-chat.md"><code>visual-explainers-for-chat.md</code></a> (one file to attach to any chat).</p>
+</div>
+
+<div class="block" id="agents">
+  <p class="kicker">Coding agents</p>
+  <h2>Coding agents on your computer</h2>
+  <p>Each of these reads skill folders natively. After installing, start a new session and ask in plain words; the agent
+    reads the skill descriptions and loads them when your request fits. The tools are listed alphabetically.</p>
+
+  <div class="tool" id="claude-code"><h3>Claude Code</h3>
+    <p>Install as a plugin from inside a session:</p>
+<pre><code>/plugin marketplace add k-sandhu/visual-explainer-skills
+/plugin install visual-explainers@visual-explainer-skills</code></pre>
+    <p>Or run <code>python scripts/install.py claude-code</code>, which copies the folders to <code>~/.claude/skills/</code> (one project: <code>.claude/skills/</code>).</p>
+    <p class="note">To call one by name, type <code>/explainer-director</code> (or <code>/visual-explainers:explainer-director</code> when installed as a plugin).</p></div>
+
+  <div class="tool" id="codex"><h3>Codex (CLI, IDE extension and app)</h3>
+    <p>Run <code>python scripts/install.py codex</code>. It copies the folders to <code>~/.agents/skills/</code> (one project: <code>.agents/skills/</code>).</p>
+    <p>Ask in plain words, list skills with <code>/skills</code>, or name one with <code>$explainer-director</code>.</p>
+    <p class="note">Codex's default sandbox has no network access, so install Playwright and Chromium before you start a session, or approve the install when Codex asks.</p></div>
+
+  <div class="tool" id="cursor"><h3>Cursor</h3>
+    <p>Version 2.4 or later. Run <code>python scripts/install.py cursor</code>, which copies the folders to <code>~/.cursor/skills/</code> (one project: <code>.cursor/skills/</code>).
+      Cursor also reads <code>~/.claude/skills/</code> and <code>~/.agents/skills/</code>, so one copy for another tool may already be enough.</p>
+    <p class="note">Ask in Agent mode, or pick a skill from the <code>/</code> menu.</p></div>
+
+  <div class="tool" id="gemini-cli"><h3>Gemini CLI and Antigravity CLI</h3>
+    <p>Gemini CLI reads skills by default in recent versions (0.26 and later; older ones need <code>skills.enabled</code> turned on). Run <code>python scripts/install.py gemini-cli</code> (folder <code>~/.gemini/skills/</code>), then check with <code>/skills list</code>.
+      Gemini CLI asks for your consent the first time it activates a skill.</p>
+    <p>Google moved free-tier and Google One users from Gemini CLI to Antigravity CLI in June 2026. For Antigravity, run
+      <code>python scripts/install.py antigravity</code> (folder <code>~/.gemini/config/skills/</code>; one project: <code>.agents/skills/</code>).</p></div>
+
+  <div class="tool" id="copilot"><h3>GitHub Copilot in VS Code</h3>
+    <p>VS Code 1.109 or later, in agent mode. Run <code>python scripts/install.py copilot</code> (folder <code>~/.copilot/skills/</code>), or, to share the skills with everyone on a repository, <code>python scripts/install.py copilot --project .</code>, which uses <code>.github/skills/</code>.</p>
+    <p class="note">Copilot asks before it runs terminal commands such as the page check; approve them, or the explainer is built without being checked.</p></div>
+
+  <div class="tool" id="opencode"><h3>OpenCode</h3>
+    <p>Run <code>python scripts/install.py opencode</code> (folder <code>~/.config/opencode/skills/</code>; one project: <code>.opencode/skills/</code>). OpenCode also reads <code>~/.claude/skills/</code> and <code>~/.agents/skills/</code>.</p>
+    <p class="note">Allow the <code>skill</code>, <code>edit</code> and <code>bash</code> permissions in <code>opencode.json</code>, or approve them when asked. OpenCode works with open-weight models; see <a href="#models">which model</a>.</p></div>
+
+  <p class="note">Other tools that read Agent Skills from <code>~/.agents/skills/</code> work the same way: <code>python scripts/install.py agents</code>.</p>
+</div>
+
+<div class="block" id="chat">
+  <p class="kicker">Chat apps</p>
+  <h2>Chat apps in the browser</h2>
+  <p>Chat apps run the assistant on the provider's servers, so there is nothing to install on your computer. Two routes:</p>
+  <div class="quick">
+    <div class="panel"><h3>Upload a skill</h3><p>Where the app supports skills, upload <code>visual-explainers.zip</code> once. It then loads by itself when you ask for an explainer, in every chat.</p></div>
+    <div class="panel"><h3>Attach one file</h3><p>Anywhere else, attach <code>visual-explainers-for-chat.md</code> to the chat (or to a project, so every chat in it has it) and ask. The chatbot writes one HTML page that loads the engine from a public link.</p></div>
+  </div>
+  <p style="margin-top:18px">To see the result: open the chat's preview of the HTML code if it has one. If it does not, or the preview blocks the engine's link,
+    copy the code into the <a href="play.html">player page</a>, which runs it and saves a single file that works offline.</p>
+
+  <div class="tool" id="chatgpt"><h3>ChatGPT</h3>
+    <h4>Skills (Business, Enterprise, Edu and Healthcare plans)</h4>
+    <p>Open Plugins, then the Skills tab, then Create, and upload <code>visual-explainers.zip</code>. Your admin may need to allow skills first. Uploads are scanned and may show "Needs review" for a while.</p>
+    <h4>Any plan</h4>
+    <p>Attach <code>visual-explainers-for-chat.md</code> to a chat or a project and ask for an explainer. Code blocks have a Preview button that renders the page.</p>
+    <p class="note">ChatGPT's Python tool has no internet access, so the page check cannot install its browser there; expect the explainer without the automatic check.</p></div>
+
+  <div class="tool" id="claude-app"><h3>Claude (web and desktop apps)</h3>
+    <p>Turn on Settings, Capabilities, "Code execution and file creation". Then open Customize, Skills, the plus button, "Upload a skill", and choose
+      <code>visual-explainers.zip</code>. On Team and Enterprise plans an owner may need to allow skills first.</p>
+    <p>Or attach <code>visual-explainers-for-chat.md</code> to a chat or a project.</p>
+    <p class="note">The app's descriptions are limited to 200 characters, which is why the uploadable zips carry short versions.</p></div>
+
+  <div class="tool" id="gemini-app"><h3>Gemini app</h3>
+    <p>Personal Google accounts: open Customize, Skills, Create, and upload <code>visual-explainers.zip</code>. Up to 100 skills can be on at once. Work and school accounts are due to get skills in 2027; until then, attach the chat file.</p>
+    <p class="note">Canvas does not work together with skills, so view the result through the code preview or the <a href="play.html">player page</a>.</p></div>
+
+  <div class="tool" id="other-chat"><h3>Other chatbots</h3>
+    <p>Any chatbot that accepts a file or a long system prompt can use <code>visual-explainers-for-chat.md</code>: Le Chat, Microsoft Copilot, or an
+      open-weight model in a local app such as LM Studio or Open WebUI. The file is about 84 KB (roughly 22,000 tokens), so the model needs a context window of at least 64,000 tokens to
+      leave room for the data and its answer.</p></div>
+</div>
+
+<div class="block" id="models">
+  <p class="kicker">Models</p>
+  <h2>Which model</h2>
+  <p>Any model that can write a long, careful program can follow the skills. To check that the instructions work outside
+    the tool they were written in, the same request went to five setups on 24 November 2026: a bakery's 60 orders, half
+    taken at the counter and half through a new app, and "make an interactive explainer that helps the staff see whether
+    the app cut waiting times". The data was made up for the test, so the right answers are known exactly: the app's
+    average wait was 0.28 minutes shorter (8.48 against 8.76), its middle wait 1.35 minutes shorter, and the four slowest of all
+    60 orders came through the app. With 30 orders a side, the data cannot tell whether the app really helps.</p>
+  <div class="tablewrap" style="margin-top:18px"><table>
+    <thead><tr><th>Tool</th><th>Model</th><th>Kind of model</th><th>Time</th><th>Cost</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Claude Code</td><td>Claude Sonnet 5.5</td><td>Mid-size, closed</td><td>37 min</td><td>$1.25</td><td><span class="ok">Worked.</span> Eight-step lesson with a plain opening, a shuffle test the reader runs, and every number right. Its own page check left two warnings.</td></tr>
+      <tr><td>Claude Code</td><td>Claude Haiku 5.5</td><td>Small, closed</td><td>28 min</td><td>$0.39</td><td><span class="ok">Worked.</span> Eight steps, every number right, one layout warning left. Took 88 turns to fix what its checks found.</td></tr>
+      <tr><td>Codex</td><td>GPT-6.1 Sol</td><td>Large, closed</td><td>14 min</td><td>Subscription (140,000 tokens)</td><td><span class="ok">Worked.</span> Six steps with a target slider, every number right; it also wrote its own browser tests.</td></tr>
+      <tr><td>OpenCode</td><td>Kimi K3.1 Pro</td><td>Large, open weights</td><td>17 min to write it</td><td>Not recorded</td><td><span class="partly">Worked, then stalled.</span> Six steps, every number right. It hung for 30 minutes waiting on the model provider during its own check and was stopped by hand.</td></tr>
+      <tr><td>Chat file, no tools</td><td>DeepSeek V4.1 Flash</td><td>Fast tier, open weights</td><td>5 min</td><td>$0.03</td><td><span class="partly">Worked, one wrong figure.</span> Seven steps with the right averages on screen, but the answer options in its guess step came from its own mental arithmetic (a 2-second gap instead of 17 seconds). The first try, capped at 32,000 output tokens, spent all of them thinking and returned nothing.</td></tr>
+    </tbody></table></div>
+  <p class="note" style="margin-top:12px">One run per setup, so this shows that each setup can work, not how often it does. The runs found a bug in the engine (a start-button label that broke lessons with an opening), fixed in version 0.7.0. Three runs hit it: two worked around it themselves and one left the error in the page. Codex's newest models were refused by the installed command-line version, so GPT-6.1 Sol stands in for them.</p>
+  <h4>What this suggests</h4>
+  <ul>
+    <li>A small model can do it when it can run the checks: the small closed model needed many more turns but finished with a correct page.</li>
+    <li>Without tools, a model cannot run the numbers it writes into prose or answer options. Ask it to compute every number in the page's code, and read the guess and summary steps against your data.</li>
+    <li>Reasoning models in a plain chat can spend their whole output budget thinking. If a reply comes back empty or cut off, ask again or raise the limit.</li>
+  </ul>
+</div>
+
+<div class="block" id="asking">
+  <h2>Asking for an explainer</h2>
+  <p>Say what the data is, what you want people to understand and who will look at it, and where. You do not need to name a form or a skill.</p>
+<pre><code>data.csv has 60 orders from our bakery, half taken at the counter and half through the new app, with how long
+each customer waited. Make an interactive explainer for the staff meeting that shows whether the app cut
+waiting times. They will look at it on laptops.</code></pre>
+  <ul>
+    <li>Give the data as a file, or paste it. Every number on screen is computed from it.</li>
+    <li>Say who the reader is and what they already know. The opening is written for them.</li>
+    <li>Say where it will be seen: a page, a slide, a report, or a social post (which gets a self-playing card).</li>
+    <li>Ask for a GIF or video if you want one; coding agents with ffmpeg can record it.</li>
+  </ul>
+</div>
+</div>
+</div></section></main>
+
+<footer><div class="wrap"><span>MIT licence.</span><span><a href="./">Gallery</a> · <a href="play.html">Player</a> · <a href="https://github.com/k-sandhu/visual-explainer-skills">GitHub</a></span></div></footer>
+</body></html>

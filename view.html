@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Explainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site/site.css">
+<style>
+.crumbs { font-size: 14px; color: var(--mut); margin: 0 0 14px } .crumbs a { color: var(--mut) } .crumbs a:hover { color: var(--ink) }
+.head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 44px; align-items: start; margin-bottom: 30px }
+.head h1 { font-size: clamp(30px, 3.8vw, 44px) }
+.head .prose p { color: var(--ink-2); font-size: 16.5px }
+.head .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px }
+@media (max-width: 900px) { .head { grid-template-columns: minmax(0, 1fr); gap: 16px } }
+.made { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 26px }
+.made div { border-left: 2px solid var(--line-2); padding: 0 0 0 14px; font-size: 14.5px; color: var(--ink-2) }
+.made b { display: block; color: var(--ink); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px }
+@media (max-width: 760px) { .made { grid-template-columns: minmax(0, 1fr) } }
+.pager { display: flex; justify-content: space-between; gap: 12px; margin-top: 30px; flex-wrap: wrap }
+.pager a { max-width: 48%; } @media (max-width: 620px) { .pager a { max-width: 100% } }
+</style>
+</head><body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="./"><b>Visual explainers</b><span>skills for AI assistants</span></a>
+  <nav aria-label="Site"><a href="./#gallery" aria-current="page">Gallery</a><a class="wide" href="./#how">How it works</a><a href="setup.html">Set up</a><a href="play.html">Player</a><a class="wide" href="https://github.com/k-sandhu/visual-explainer-skills">GitHub</a></nav>
+</div></header>
+
+<main>
+<section style="padding-top:40px"><div class="wrap">
+  <p class="crumbs"><a href="./#gallery">Gallery</a> / <a id="crumb-form" href="./#gallery"></a></p>
+  <div class="head">
+    <div><h1 id="title"></h1><div class="tags" id="tags"></div></div>
+    <div class="prose" id="intro"></div>
+  </div>
+  <div class="frame"><iframe id="frame" title="Explainer"></iframe></div>
+  <p class="frame-note"><span id="source"></span> <a id="raw" href="#">Open the explainer alone</a>.</p>
+  <div class="made" id="made"></div>
+  <div class="pager" id="pager"></div>
+</div></section>
+
+<section id="more"><div class="wrap">
+  <h2 id="more-title" style="font-size:24px;margin-bottom:22px"></h2>
+  <div class="grid" id="more-grid"></div>
+</div></section>
+</main>
+
+<footer><div class="wrap"><span>Built with the visual explainer skills. MIT licence.</span><span><a href="./">All examples</a> · <a href="setup.html">Set it up</a></span></div></footer>
+
+<script src="examples/index.js"></script>
+<script>
+const { FORMS, EXAMPLES } = window;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const slug = new URLSearchParams(location.search).get('ex');
+const i = Math.max(0, EXAMPLES.findIndex(e => e.slug === slug)), e = EXAMPLES[i], f = FORMS.find(x => x.id === e.form);
+document.title = e.title + ' · Visual explainers';
+document.getElementById('title').textContent = e.title;
+document.getElementById('crumb-form').textContent = f.name; document.getElementById('crumb-form').href = './#' + f.id;
+document.getElementById('intro').innerHTML = e.intro.map(p => `<p>${esc(p)}</p>`).join('');
+document.getElementById('tags').innerHTML = `<span class="tag">${esc(f.name)}</span><span class="tag">${esc(e.style)} style</span>`;
+document.getElementById('source').innerHTML = e.link ? `Data: <a href="${esc(e.link)}">${esc(e.source)}</a>.` : `Data: ${esc(e.source)}.`;
+document.getElementById('raw').href = `examples/${e.slug}/explainer.html`;
+document.getElementById('made').innerHTML = `
+  <div><b>Form</b>${esc(f.name)}, from the <code>${esc(f.skill)}</code> skill. ${esc(f.use)}</div>
+  <div><b>Built with</b>The explainer engine in one HTML file (${e.kb} KB), in the ${esc(e.style)} style, with no other dependencies.</div>
+  <div><b>Reading it</b>${esc(f.look)}</div>`;
+const prev = EXAMPLES[(i - 1 + EXAMPLES.length) % EXAMPLES.length], next = EXAMPLES[(i + 1) % EXAMPLES.length];
+document.getElementById('pager').innerHTML = `<a class="btn" href="view.html?ex=${prev.slug}">← ${esc(prev.title)}</a><a class="btn" href="view.html?ex=${next.slug}">${esc(next.title)} →</a>`;
+const others = EXAMPLES.filter(x => x.form === e.form && x.slug !== e.slug);
+document.getElementById('more-title').textContent = others.length ? `More ${f.name.toLowerCase()}` : 'Other examples';
+document.getElementById('more-grid').innerHTML = (others.length ? others : EXAMPLES.filter(x => x.slug !== e.slug).slice(0, 3)).map(x => `<a class="card" href="view.html?ex=${encodeURIComponent(x.slug)}">
+  <div class="shot"><img src="examples/${x.slug}/thumb.jpg" alt="Opening of the explainer: ${esc(x.title)}" loading="lazy" width="760" height="475"></div>
+  <div class="body"><h3>${esc(x.title)}</h3><p>${esc(x.text)}</p><div class="meta"><span>${esc(x.sourceShort)}</span></div></div></a>`).join('');
+
+const fr = document.getElementById('frame');
+fr.title = 'Explainer: ' + e.title;
+fr.src = `examples/${e.slug}/explainer.html`;
+function fit() {
+  try {
+    const d = fr.contentDocument; if (!d || !d.body) return;
+    const kids = [...d.body.children].filter(k => k.tagName !== 'SCRIPT' && k.tagName !== 'STYLE');
+    const bottom = Math.max(0, ...kids.map(k => k.getBoundingClientRect().bottom + (fr.contentWindow.scrollY || 0)));
+    if (bottom > 150) fr.style.height = Math.ceil(bottom + 18) + 'px';
+  } catch (err) { /* opened from disk without a server: keep the default height */ }
+}
+fr.addEventListener('load', () => { fit(); try { new ResizeObserver(fit).observe(fr.contentDocument.body); } catch (err) {} setTimeout(fit, 800); setTimeout(fit, 2500); });
+addEventListener('resize', fit);
+</script>
+</body></html>

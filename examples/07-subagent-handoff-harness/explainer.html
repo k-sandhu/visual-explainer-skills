@@ -6,7 +6,7 @@
 </head><body>
 <div id="x"></div>
 <script>
-/* explainer-kit v1. A small engine for animated, stepwise SVG explainers. No dependencies.
+/* explainer-kit v1.3. A small engine for animated, stepwise SVG explainers. No dependencies.
    Exposes window.K. Read explainer-kit/SKILL.md for the API and the rules it encodes.
    Every animation is tied to a "generation": moving to another step cancels all timers,
    loops and tweens of the old step, so steps can never bleed into each other. */
@@ -24,43 +24,59 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 function rng(seed) { let a = seed >>> 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
 /* ---------- styles: one object per look. ink colours draw lines and text; fill colours encode data
-   (fills were checked for colour-blind separation against their background). */
+   (every pair of fills stays apart under simulated protan, deutan and tritan vision, and each has contrast
+   of at least 3 against its background; scripts/check_theme.py --builtin shows the numbers). */
 const STYLES = {
   chalkboard: { dark: 1, bg: '#1E2023', panel: '#17191B', ink: '#ECE7DA', mut: '#9A9A93', faint: '#55585E', line: '#4A4D53',
     blue: '#9CC3E6', green: '#A8DDC3', amber: '#F2D98B', violet: '#C3B5E8', red: '#EBA494',
-    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    fill: { blue: '#3F82AE', amber: '#C38719', green: '#28AD7E', violet: '#A070E8', red: '#D34144' },
     rough: 1, texture: 1, hand: "'Caveat', cursive", handSize: 1.12, font: 'https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap' },
   paper: { dark: 0, bg: '#FBF8F1', panel: '#F3EEE3', ink: '#22252A', mut: '#5F6368', faint: '#C9C3B6', line: '#BDB6A8',
     blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
-    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    fill: { blue: '#0080D4', amber: '#C27C12', green: '#227D54', violet: '#87559D', red: '#CF2627' },
     rough: .7, texture: 0, hand: "'Kalam', cursive", handSize: 1, font: 'https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&display=swap' },
   editorial: { dark: 0, bg: '#FFFFFF', panel: '#F5F5F2', ink: '#1A1A1A', mut: '#5C5C5C', faint: '#D6D6D0', line: '#C4C4BE',
     blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
-    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    fill: { blue: '#0080D4', amber: '#C27C12', green: '#227D54', violet: '#87559D', red: '#CF2627' },
     rough: 0, texture: 0, hand: "'Source Serif 4', Georgia, serif", handSize: .9, font: 'https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&display=swap' },
   blueprint: { dark: 1, bg: '#10243A', panel: '#0C1C2E', ink: '#E6EEF5', mut: '#93A8BC', faint: '#3A5672', line: '#4A6A89',
     blue: '#8EC5F0', green: '#9BE0C0', amber: '#F5D58A', violet: '#C9B8F2', red: '#F2A08F',
-    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    fill: { blue: '#3F82AE', amber: '#C38719', green: '#28AD7E', violet: '#A070E8', red: '#D34144' },
     rough: 0, texture: 0, grid: 1, hand: "'IBM Plex Mono', ui-monospace, monospace", handSize: .78, font: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap' },
 };
 let ST = STYLES.chalkboard, ROUGH = 1;
 const C = {};                                   // active colours, e.g. K.C.ink, K.C.fill.blue
 function col(c) { if (!c) return C.ink; if (c[0] === '#' || c.startsWith('rgb') || c === 'none' || c === 'transparent') return c; if (c.startsWith('fill.')) return C.fill[c.slice(5)] || c; return C[c] || c; }
+/* A theme is an object instead of a style name: your own colours and fonts merged over a built-in base
+   (references/themes.md). Slot names stay the same, so scene code works with any theme. */
+function resolveStyle(name) {
+  if (name && typeof name === 'object') {
+    const t = name, lum = h => { const v = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+    const dark = 'dark' in t ? !!t.dark : (t.bg ? lum(t.bg) < .18 : false);
+    const base = t.base in STYLES ? t.base : dark ? 'blueprint' : 'editorial';
+    const st = { ...STYLES[base], ...t, fill: { ...STYLES[base].fill, ...(t.fill || {}) }, dark: dark ? 1 : 0 };
+    if (!t.base && !('grid' in t)) st.grid = 0;
+    if (t.hand && !('font' in t)) st.font = null;           // a theme font that is installed locally, or a system font
+    return [st, base];
+  }
+  return name in STYLES ? [STYLES[name], name] : [STYLES.chalkboard, 'chalkboard'];
+}
 function useStyle(name, root) {
-  ST = STYLES[name] || STYLES.chalkboard; ROUGH = ST.rough;
+  let base; [ST, base] = resolveStyle(name); ROUGH = ST.rough || 0;
   Object.keys(C).forEach(k => delete C[k]); Object.assign(C, ST, { fill: { ...ST.fill } });
   injectCSS();
-  if (ST.font && !document.querySelector(`link[href="${ST.font}"]`)) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = ST.font; document.head.appendChild(l); }
+  [].concat(ST.font || []).forEach(u => { if (!document.querySelector(`link[href="${u}"]`)) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); } });
   if (root) {
     const v = { bg: ST.bg, panel: ST.panel, ink: ST.ink, mut: ST.mut, faint: ST.faint, line: ST.line, blue: ST.blue, green: ST.green, amber: ST.amber, violet: ST.violet, red: ST.red, hand: ST.hand };
     for (const k in v) root.style.setProperty('--k-' + k, v[k]);
-    root.classList.add('kx', 'kx-' + (name in STYLES ? name : 'chalkboard'));
+    if (ST.sans) root.style.setProperty('--font-sans', ST.sans);
+    root.classList.add('kx', 'kx-' + base);
     if (ST.texture) { const r = rng(9); let s = ''; for (let i = 0; i < 140; i++) s += `<circle cx='${(r() * 240).toFixed(1)}' cy='${(r() * 240).toFixed(1)}' r='${(.4 + r() * .8).toFixed(2)}' fill='%23ffffff' fill-opacity='${(.02 + r() * .045).toFixed(3)}'/>`; root.style.backgroundImage = `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>${s}</svg>")`; }
     if (ST.grid) root.style.backgroundImage = `linear-gradient(${ST.faint}55 1px,transparent 1px),linear-gradient(90deg,${ST.faint}55 1px,transparent 1px)`, root.style.backgroundSize = '20px 20px';
   }
   return ST;
 }
-function fontsReady(ms = 1500) { return Promise.race([document.fonts ? document.fonts.ready.then(() => document.fonts.load(`20px ${ST.hand.split(',')[0]}`)) : Promise.resolve(), new Promise(r => setTimeout(r, ms))]).catch(() => {}); }
+function fontsReady(ms = 1500) { const fams = [ST.hand, ST.sans].filter(Boolean).map(h => h.split(',')[0]); return Promise.race([document.fonts ? document.fonts.ready.then(() => Promise.all(fams.map(f => document.fonts.load(`20px ${f}`)))) : Promise.resolve(), new Promise(r => setTimeout(r, ms))]).catch(() => {}); }
 
 /* ---------- hand-drawn geometry. Each shape takes a seed so its wobble is identical on every frame. */
 const J = (r, a) => (r() - .5) * 2 * a * ROUGH;
@@ -90,9 +106,10 @@ function reveal(svg) {
   const els = [...svg.querySelectorAll('[data-k]')];
   if (RM) { els.forEach(e => { e.style.opacity = 1; e.style.strokeDashoffset = 0; }); return 0; }
   let end = 0;
-  els.forEach(e => { e.style.transition = 'none'; const t = +e.dataset.t, d = +e.dataset.d; end = Math.max(end, t + d); if (e.dataset.k === 'draw') { const L = e.getTotalLength() + 1; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; } else e.style.opacity = 0; });
+  const drawn = e => e.dataset.k === 'draw' && !e.getAttribute('stroke-dasharray');   // a dashed line fades in, so the draw-in does not replace its dashes
+  els.forEach(e => { e.style.transition = 'none'; const t = +e.dataset.t, d = +e.dataset.d; end = Math.max(end, t + d); if (drawn(e)) { const L = e.getTotalLength() + 1; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; } else e.style.opacity = 0; });
   svg.getBoundingClientRect();
-  requestAnimationFrame(() => requestAnimationFrame(() => els.forEach(e => { const t = e.dataset.t, d = e.dataset.d; if (e.dataset.k === 'draw') { e.style.transition = `stroke-dashoffset ${d}ms cubic-bezier(.45,0,.55,1) ${t}ms`; e.style.strokeDashoffset = 0; } else { e.style.transition = `opacity ${d}ms ease ${t}ms`; e.style.opacity = 1; } })));
+  requestAnimationFrame(() => requestAnimationFrame(() => els.forEach(e => { const t = e.dataset.t, d = e.dataset.d; if (drawn(e)) { e.style.transition = `stroke-dashoffset ${d}ms cubic-bezier(.45,0,.55,1) ${t}ms`; e.style.strokeDashoffset = 0; } else { e.style.transition = `opacity ${d}ms ease ${t}ms`; e.style.opacity = 1; } })));
   return end;
 }
 function finish(svg) { svg.querySelectorAll('[data-k]').forEach(e => { e.style.transition = 'none'; e.style.strokeDashoffset = 0; e.style.opacity = 1; }); }
@@ -112,11 +129,22 @@ let cssDone = false;
 function injectCSS() {
   if (cssDone) return; cssDone = true;
   const s = document.createElement('style');
-  s.textContent = `.kx{background-color:var(--k-bg);color:var(--k-ink);border-radius:16px;padding:14px 10px 12px;font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);max-width:560px;margin:0 auto;position:relative;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  s.textContent = `.kx{background-color:var(--k-bg);color:var(--k-ink);border-radius:16px;padding:14px 10px 12px;font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);max-width:560px;margin:0 auto;position:relative;box-sizing:border-box;-webkit-tap-highlight-color:transparent;display:flex;flex-direction:column}
+.kx-side{display:contents}.kx-head{order:-1}
+.kx.kx-wide{max-width:1120px;display:grid;grid-template-columns:minmax(0,640px) minmax(300px,420px);justify-content:center;gap:0 32px;padding:22px 24px 20px;align-items:start}
+.kx-wide .kx-main{min-width:0;align-self:center}.kx-wide svg.kx-stage{max-height:calc(100vh - 60px)}
+.kx-wide .kx-side{display:flex;flex-direction:column;min-width:0;align-self:stretch}.kx-wide .kx-head{flex-direction:column;align-items:flex-start;gap:2px;margin:4px 0 6px}
+.kx-wide .kx-title{font-size:30px}.kx-wide.kx-blueprint .kx-title,.kx-wide.kx-editorial .kx-title{font-size:23px}.kx-wide .kx-count{font-size:13px}
+.kx-wide .kx-cap{font-size:16px;line-height:1.6;margin:8px 0 12px}.kx-wide .kx-act{justify-content:flex-start;margin:0 0 6px}.kx-wide .kx-legend{font-size:13px;margin:6px 0 10px;min-height:0}
+.kx-wide .kx-nav{margin-top:auto;padding-top:10px}.kx-wide .kx-ctl{margin:4px 0;font-size:13.5px}.kx-wide .kx-log{margin:8px 0 0}.kx-wide .kx-scrub{margin:6px 0}
+.kx-wide.kx-figure .kx-nav{margin-top:12px}
+.kx-introing .kx-scrub,.kx-introing .kx-nav,.kx-introing .kx-legend,.kx-introing .kx-log,.kx-introing .kx-act{visibility:hidden}
+.kx-introhost{position:relative}.kx-introing .kx-introhost .kx-introbtn{visibility:visible;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1}.kx-wide.kx-introing .kx-introhost .kx-introbtn{left:auto;right:0;transform:translateY(-50%)}
+.kx-introbar{display:flex;justify-content:center;margin:2px 4px 10px}.kx-wide .kx-introbar{justify-content:flex-start;margin:2px 0 12px}.kx .kx-introbar button{min-width:150px}
 .kx *{box-sizing:border-box}.kx svg.kx-stage{display:block;width:100%;height:auto;overflow:visible;transition:opacity .22s ease}
 .kx-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 6px;min-height:28px}
 .kx-title{font-family:var(--k-hand);font-size:23px;line-height:1.15}.kx-blueprint .kx-title,.kx-editorial .kx-title{font-size:19px}
-.kx-count{font-size:11px;color:var(--k-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.kx-count{font-size:12px;color:var(--k-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
 .kx-cap{font-size:13.5px;line-height:1.55;margin:6px 8px 8px;color:var(--k-ink)}
 .kx-act{display:flex;justify-content:center;align-items:center;gap:8px;min-height:44px;flex-wrap:wrap;margin:0 4px 4px}
 .kx-legend{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px 12px;font-size:12px;color:var(--k-mut);margin:6px 8px 8px;min-height:40px}.kx-legend>span{transition:opacity .4s}
@@ -126,16 +154,18 @@ function injectCSS() {
 .kx button{background:transparent;border:1px solid var(--k-line);color:var(--k-ink);border-radius:8px;padding:0 12px;font:inherit;font-size:13px;min-height:40px;min-width:40px;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}
 .kx button:hover{border-color:var(--k-mut)}.kx button:focus-visible,.kx [role=button]:focus-visible{outline:2px solid var(--k-violet);outline-offset:2px}
 .kx button.pri{border-color:var(--k-violet);color:var(--k-violet)}.kx button[aria-pressed=true]{background:color-mix(in srgb,var(--k-violet) 18%,transparent)}
-.kx-dots{display:flex;flex:1;justify-content:center;flex-wrap:nowrap;min-width:0}
+.kx-dots{display:flex;flex:1;justify-content:center;flex-wrap:nowrap;min-width:0;overflow:hidden}
 .kx button.kx-dot{padding:10px 5px;border:0;min-height:0;min-width:0;background:none}
-.kx-dot i{width:8px;height:8px;border-radius:50%;border:1px solid var(--k-mut);display:inline-block}.kx-dot[aria-current=step] i{background:var(--k-ink);border-color:var(--k-ink)}
-.kx-log{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:11px;line-height:17px;height:92px;overflow:hidden;background:var(--k-panel);border:1px solid var(--k-line);border-radius:8px;padding:6px 8px;margin:8px 4px 0;display:flex;flex-direction:column;justify-content:flex-end;white-space:pre-wrap}
-.kx-scrub{display:flex;align-items:center;gap:8px;margin:6px 4px}.kx-scrub input{flex:1}
-.kx-time{font-size:11px;color:var(--k-mut);min-width:64px;text-align:right;font-variant-numeric:tabular-nums}
+.kx-dot i{width:8px;height:8px;flex:none;border-radius:50%;border:1px solid var(--k-mut);display:inline-block}.kx-dot[aria-current=step] i{background:var(--k-ink);border-color:var(--k-ink)}
+.kx-log{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:18px;height:98px;overflow:hidden;background:var(--k-panel);border:1px solid var(--k-line);border-radius:8px;padding:6px 8px;margin:8px 4px 0;display:flex;flex-direction:column;justify-content:flex-end;white-space:pre-wrap}
+.kx-scrub{display:flex;align-items:center;gap:8px;margin:6px 4px}.kx-scrub input{flex:1;min-width:60px}.kx button.kx-speed{min-width:46px;padding:0 6px;font-variant-numeric:tabular-nums}
+.kx-time{font-size:12px;color:var(--k-mut);min-width:64px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .kx input[type=range]{accent-color:var(--k-violet);height:32px;width:100%;margin:0}
 .kx-ctl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:12.5px;margin:4px 8px}.kx-ctl output{font-variant-numeric:tabular-nums;color:var(--k-ink);font-weight:600}.kx-ctl input{grid-column:1/3}
 .kx .pulse{animation:kxpl 1.2s ease-in-out 1 forwards}@keyframes kxpl{0%,100%{opacity:0}50%{opacity:.85}}
 .kx-ripple{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;border:2px solid var(--k-ink);pointer-events:none;animation:kxrp .6s ease-out forwards}@keyframes kxrp{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
+.kx-gap{flex:1}.kx-nav.kx-solo{justify-content:center}
+.kx-figure .kx-act:empty,.kx-figure .kx-cap:empty,.kx-figure .kx-nav:empty,.kx-figure .kx-legend:empty{display:none}.kx-figure .kx-act{min-height:0}
 .kx-recording .kx-nav button:not(.kx-dot),.kx-recording .kx-scrub button{visibility:hidden}
 .kx .sr-only,.sr-only{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.kx *{transition:none!important;animation:none!important}}`;
@@ -188,42 +218,116 @@ function makeCtx(eng, svg, i) {
   return s;
 }
 
+/* ---------- layout. 'auto' (default) puts the drawing beside the text and controls when the space the
+   explainer sits in is at least WIDE px across (a laptop or desktop), and stacks them on a phone or in a
+   narrow column. 'stack' always stacks; 'side' always sits side by side. The drawing keeps its viewBox in
+   both, so one scene serves both layouts; it simply draws larger on a wide screen. */
+const WIDE = 760;
+function layout(root, mode) {
+  const set = on => { if (root.classList.contains('kx-wide') === on) return; root.classList.toggle('kx-wide', on); dispatchEvent(new Event('resize')); };
+  if (mode === 'side' || mode === 'stack') { set(mode === 'side'); return; }
+  const host = root.parentElement || document.body, check = () => set((host.clientWidth || innerWidth) >= WIDE);
+  check(); if ('ResizeObserver' in window) new ResizeObserver(check).observe(host); else addEventListener('resize', check);
+}
+
+/* ---------- intro: an opening scene for a reader who knows nothing about the subject. o.intro =
+   {title, cap, draw, alt, start}. A stepper shows it as its first step; a player or figure shows it until
+   the reader presses Start, then builds the real view. Recording and ?step= / ?static links skip it. */
+function introStep(it) {   // in a stepper the intro is step 0; its `start` is the button label, not a step's start(s) function
+  const st = Object.assign({ title: 'Before you start' }, it, { isIntro: true });
+  if (typeof st.start !== 'function') { st.label = st.start; delete st.start; }
+  return st;
+}
+function introGate(fr, o, start) {
+  const it = o.intro;
+  if (!it || REC || QS.has('step') || QS.has('static')) { start(); return; }
+  fr.root.classList.add('kx-introing');
+  fr.svg.innerHTML = (typeof it.draw === 'function' ? it.draw(K) : it.draw || '') + '<g class="kx-dyn"></g>'; reveal(fr.svg);
+  fr.title.textContent = it.title || 'Before you start'; fr.count.textContent = 'Start here'; fr.cap.textContent = it.cap || '';
+  fr.svg.setAttribute('aria-label', (it.title || '') + '. ' + (it.alt || it.cap || ''));
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'pri kx-introbtn'; b.innerHTML = esc(typeof it.start === 'string' ? it.start : 'Start') + ICON.right;
+  // put the Start button over a control row that is already there (hidden during the intro), so nothing moves when it goes;
+  // a figure with no control row gets a row of its own
+  const host = fr.root.querySelector('.kx-nav') || fr.root.querySelector('.kx-scrub');
+  let bar = null;
+  if (host) { host.classList.add('kx-introhost'); host.appendChild(b); }
+  else { bar = document.createElement('div'); bar.className = 'kx-introbar'; bar.appendChild(b); fr.cap.after(bar); }
+  fr.endIntro = () => { fr.endIntro = null; b.remove(); if (bar) bar.remove(); if (host) host.classList.remove('kx-introhost'); fr.root.classList.remove('kx-introing'); };
+  b.onclick = () => { if (fr.endIntro) fr.endIntro(); start(); };
+}
+
 /* ---------- stepper: a lesson that moves one idea at a time, with fixed controls */
 const ALL = (window.EXPLAINERS = window.EXPLAINERS || []);
 function frame(root, o, kind) {
   root = typeof root === 'string' ? document.querySelector(root) : root;
   useStyle(o.style || 'chalkboard', root);
   const [W, H] = o.viewBox || [380, 300];
+  /* controls: 'full' (every button), 'minimal' (Back and Next, or play and scrub), 'none' (plays by itself,
+     with only a pause button). A figure defaults to 'none'. Under reduced motion a stepper or player that
+     cannot play itself falls back to 'minimal', so the reader can still move through it. */
+  let ctl = ['full', 'minimal', 'none'].includes(o.controls) ? o.controls : kind === 'figure' ? 'none' : 'full';
+  if (RM && ctl === 'none' && kind !== 'figure') ctl = 'minimal';
   const legend = (o.legend || []).map(l => `<span data-l="${l.key}"><span class="kx-sw" style="background:${col(l.color)}"></span>${esc(l.label)}</span>`).join('');
-  root.innerHTML = `<h2 class="sr-only">${esc(o.title || '')}</h2><div class="kx-head"><span class="kx-title"></span><span class="kx-count"></span></div>
-<svg class="kx-stage" viewBox="0 0 ${W} ${H}" role="img"></svg><p class="kx-cap" aria-live="polite"></p>${kind === 'player' && o.log ? '<div class="kx-log" aria-hidden="true"></div>' : ''}
-${kind === 'player' ? '<div class="kx-scrub"><button class="kx-pp" type="button"></button><input type="range" min="0" step="1" aria-label="Scrub the timeline"><span class="kx-time"></span></div>' : '<div class="kx-act"></div>'}
-${legend ? `<div class="kx-legend">${legend}</div>` : ''}<div class="kx-nav"><button class="kx-back" type="button" aria-label="Previous">${ICON.left}</button><div class="kx-dots"></div>${kind === 'stepper' ? `<button class="kx-replay" type="button" aria-label="Replay this step" title="Replay this step">${ICON.replay}</button>` : ''}<button class="kx-next" type="button"></button></div>`;
+  const B = { back: `<button class="kx-back" type="button" aria-label="Previous">${ICON.left}</button>`, next: '<button class="kx-next" type="button"></button>', dots: '<div class="kx-dots"></div>', gap: '<span class="kx-gap"></span>',
+    replay: `<button class="kx-replay" type="button" aria-label="Replay" title="Replay">${ICON.replay}</button>`, pp: '<button class="kx-pp" type="button"></button>' };
+  let nav = '', scrub = '', solo = false;
+  if (kind === 'stepper') { if (ctl === 'full') nav = B.back + B.dots + B.replay + B.next; else if (ctl === 'minimal') nav = B.back + B.gap + B.next; else { nav = B.pp; solo = true; } }
+  else if (kind === 'player') { scrub = ctl === 'none' ? '' : `<div class="kx-scrub">${B.pp}<input type="range" min="0" step="1" aria-label="Scrub the timeline"><span class="kx-time"></span></div>`;
+    if (ctl === 'full') nav = B.back + B.dots + B.next; else if (ctl === 'none') { nav = B.pp; solo = true; } }
+  else { nav = (o.frame && !RM ? B.pp : '') + (ctl !== 'none' ? B.replay : ''); solo = true; }
+  root.innerHTML = `<h2 class="sr-only">${esc(o.title || '')}</h2><div class="kx-main"><svg class="kx-stage" viewBox="0 0 ${W} ${H}" role="img"></svg></div>
+<div class="kx-side"><div class="kx-head"><span class="kx-title"></span><span class="kx-count"></span></div><p class="kx-cap" aria-live="polite"></p>${kind === 'player' && o.log ? '<div class="kx-log" aria-hidden="true"></div>' : ''}
+${kind === 'player' ? scrub : '<div class="kx-act"></div>'}
+${legend ? `<div class="kx-legend">${legend}</div>` : ''}${nav ? `<div class="kx-nav${solo ? ' kx-solo' : ''}">${nav}</div>` : ''}</div>`;
+  root.classList.add('kx-' + kind, 'kx-c-' + ctl);
+  layout(root, o.layout || 'auto');
   if (REC) root.classList.add('kx-recording');
   const $ = s => root.querySelector(s);
-  return { root, W, H, svg: $('.kx-stage'), cap: $('.kx-cap'), act: $('.kx-act'), title: $('.kx-title'), count: $('.kx-count'), dots: $('.kx-dots'), next: $('.kx-next'), back: $('.kx-back'), replay: $('.kx-replay'), log: $('.kx-log'), $ };
+  return { root, W, H, ctl, svg: $('.kx-stage'), head: $('.kx-head'), cap: $('.kx-cap'), act: $('.kx-act'), title: $('.kx-title'), count: $('.kx-count'), dots: $('.kx-dots'), next: $('.kx-next'), back: $('.kx-back'), replay: $('.kx-replay'), pp: $('.kx-pp'), log: $('.kx-log'), $ };
 }
+function fixWidth(b, labels) {   // size a button to its widest label, so a changing label never moves other controls
+  if (!b) return; const keep = b.innerHTML; b.style.minWidth = ''; let w = 0;
+  for (const h of labels) { b.innerHTML = h; w = Math.max(w, b.getBoundingClientRect().width); }
+  b.innerHTML = keep; b.style.minWidth = Math.ceil(w) + 'px'; }
 function fixCaptionHeight(fr, texts) {   // reserve the tallest caption so nothing below it ever moves
   const m = fr.cap.cloneNode(); m.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;min-height:0;width:${fr.cap.clientWidth}px`; m.removeAttribute('aria-live'); fr.cap.parentNode.appendChild(m);
   let h = 0; texts.forEach(t => { m.textContent = t; h = Math.max(h, m.offsetHeight); }); m.remove(); fr.cap.style.minHeight = h + 'px';
 }
+function fixHeadHeight(fr, titles, counts) {   // reserve the tallest heading (title plus step count) any step shows
+  const h = fr.head; if (!h || !h.isConnected || !h.clientWidth) return;
+  const t0 = fr.title.textContent, c0 = fr.count.textContent; h.style.minHeight = '0px'; let m = 0;
+  titles.forEach(t => counts.forEach(c => { fr.title.textContent = t || ''; fr.count.textContent = c; m = Math.max(m, h.offsetHeight); }));
+  fr.title.textContent = t0; fr.count.textContent = c0; h.style.minHeight = m + 'px';
+}
+function fixLegendHeight(fr, keySets) {   // reserve the tallest legend any step shows, so a step with more colours never pushes the controls down
+  const lg = fr.root.querySelector('.kx-legend'); if (!lg || !lg.clientWidth) return;
+  const spans = [...lg.querySelectorAll('[data-l]')], keep = spans.map(e => e.style.display); lg.style.minHeight = '0px'; let h = 0;
+  keySets.forEach(ks => { spans.forEach(e => e.style.display = !ks || ks.includes(e.dataset.l) ? '' : 'none'); h = Math.max(h, lg.offsetHeight); });
+  spans.forEach((e, j) => e.style.display = keep[j]); lg.style.minHeight = h + 'px';
+}
 function stepper(o) {
-  const fr = frame(o.root, o, 'stepper'), S = o.steps;
+  const fr = frame(o.root, o, 'stepper'), S = o.intro ? [introStep(o.intro)].concat(o.steps) : o.steps, N0 = o.intro ? 1 : 0;
   if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
   const eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
   let cur = 0, first = true, auto = null, ends = [];
-  eng.stopAuto = () => { auto = null; };
-  S.forEach((st, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to step ' + (i + 1)); b.innerHTML = '<i></i>'; b.onclick = () => go(i); fr.dots.appendChild(b); });
+  const PPL = [ICON.pause + 'Pause', ICON.play + 'Play'];
+  const updPP = () => { if (!fr.pp) return; fr.pp.innerHTML = auto ? PPL[0] : PPL[1]; fr.pp.setAttribute('aria-label', auto ? 'Pause' : 'Play'); };
+  eng.stopAuto = () => { auto = null; updPP(); };
+  if (fr.dots) S.forEach((st, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to step ' + (i + 1)); b.innerHTML = '<i></i>'; b.onclick = () => go(i); fr.dots.appendChild(b); });
   const capTexts = S.map(st => st.cap || '').concat(o.extraCaptions || []);
-  fixCaptionHeight(fr, capTexts); addEventListener('resize', () => fixCaptionHeight(fr, capTexts));
+  const keySets = S.map(st => st.keys), counts = ['Start here', `Step ${S.length} of ${S.length}`], fixLeg = () => { fixLegendHeight(fr, keySets); fixHeadHeight(fr, S.map(st => st.title), counts); };
+  fixCaptionHeight(fr, capTexts); fixLeg(); addEventListener('resize', () => { fixCaptionHeight(fr, capTexts); fixLeg(); });
+  const fixNext = () => { fixWidth(fr.next, [ICON.restart + 'Start over', 'Next' + ICON.right].concat(o.intro ? [esc(S[0].label || 'Start') + ICON.right] : [])); fixWidth(fr.pp, PPL); };
+  fontsReady().then(() => { fixCaptionHeight(fr, capTexts); fixLeg(); fixNext(); });   // a web font can wrap and size text differently once it loads
+  addEventListener('resize', fixNext);
   function build(i) {
     cur = i; eng.touched = false; const st = S[i], s = {};
     fr.svg.innerHTML = (typeof st.draw === 'function' ? st.draw(K) : st.draw || '') + '<g class="kx-dyn"></g>';
-    fr.act.innerHTML = ''; fr.title.textContent = st.title || ''; fr.count.textContent = `Step ${i + 1} of ${S.length}`;
+    fr.act.innerHTML = ''; fr.title.textContent = st.title || ''; fr.count.textContent = S[i].isIntro ? 'Start here' : `Step ${i + 1 - N0} of ${S.length - N0}`;
     fr.svg.setAttribute('aria-label', (st.title || '') + '. ' + (st.alt || st.cap || ''));
-    [...fr.dots.children].forEach((d, j) => j === i ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'));
+    if (fr.dots) [...fr.dots.children].forEach((d, j) => j === i ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'));
     fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !st.keys || st.keys.includes(e.dataset.l) ? '' : 'none');   // only this step's colours
-    fr.next.innerHTML = i === S.length - 1 ? ICON.restart + 'Start over' : 'Next' + ICON.right;
+    if (fr.next) fr.next.innerHTML = i === S.length - 1 ? ICON.restart + 'Start over' : S[i].isIntro ? esc(S[i].label || 'Start') + ICON.right : 'Next' + ICON.right;
     fr.cap.style.transition = 'none'; fr.cap.style.opacity = 0; fr.cap.textContent = st.cap || '';
     const revealEnd = reveal(fr.svg);
     const ctx = makeCtx(eng, fr.svg, i);
@@ -235,62 +339,148 @@ function stepper(o) {
     eng.ctx = ctx;
   }
   function go(i, keepAuto) {
-    if (!keepAuto) auto = null;
+    if (!keepAuto && auto) { auto = null; updPP(); }
     eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = [];
     i = Math.max(0, Math.min(S.length - 1, i));
     const g = eng.gen;
     if (first || RM) { first = false; build(i); fr.svg.style.opacity = 1; }
     else { fr.svg.style.opacity = 0; setTimeout(() => { if (g === eng.gen) { build(i); fr.svg.style.opacity = 1; } }, 230); }
   }
-  fr.back.onclick = () => go(cur - 1);
-  fr.next.onclick = () => go(cur < S.length - 1 ? cur + 1 : 0);
-  fr.replay.onclick = () => go(cur);
+  if (fr.back) fr.back.onclick = () => go(cur - 1);
+  if (fr.next) fr.next.onclick = () => go(cur < S.length - 1 ? cur + 1 : 0);
+  if (fr.replay) fr.replay.onclick = () => go(cur);
+  const autoMode = o.autoplay != null ? o.autoplay : fr.ctl === 'none' ? 'loop' : false;
+  async function runAuto(from, hold, loop) {   // play from step `from`; with loop, start again after the last step
+    const me = auto = {}; updPP();
+    for (;;) {
+      for (let i = from; i < S.length; i++) { if (auto !== me) return; go(i, true); await sleep(260 + api.duration(i)); if (auto !== me) return; if (S[i].demo) { await Promise.race([api.demo(i), sleep(S[i].demoDuration || 12000)]); await sleep(S[i].demoDuration ? 0 : 600); } await sleep(Math.max(hold, readMs(S[i].cap) - api.duration(i))); }
+      if (!loop || auto !== me) break; from = 0;
+    }
+    if (auto === me) { auto = null; updPP(); }
+  }
+  if (fr.pp) fr.pp.onclick = () => { if (auto) eng.stopAuto(); else runAuto(cur, o.hold || 2200, autoMode === 'loop'); };
   document.addEventListener('keydown', e => { if (e.target.closest && e.target.closest('[role=button],input,button,textarea,select')) return; if (ALL.length > 1 && !fr.root.contains(document.activeElement)) return; if (e.key === 'ArrowRight') go(cur + 1); if (e.key === 'ArrowLeft') go(cur - 1); });
   const api = {
     kind: 'stepper', root: fr.root, get count() { return S.length; }, get current() { return cur; },
     go: i => go(i), duration: i => S[i].duration || ends[i] || 4000, hasDemo: i => !!S[i].demo,
     demo: i => { const c = eng.ctx; return c && c.i === i && S[i].demo ? Promise.resolve(S[i].demo(c)) : Promise.resolve(); },
     demoDuration: i => S[i].demoDuration || 0,
-    async autoplay(hold = o.hold || 2200) { const me = auto = {}; for (let i = 0; i < S.length; i++) { if (auto !== me) return; go(i, true); await sleep(260 + api.duration(i)); if (auto !== me) return; if (S[i].demo) { await Promise.race([api.demo(i), sleep(S[i].demoDuration || 12000)]); await sleep(S[i].demoDuration ? 0 : 600); } await sleep(hold); } },
+    autoplay: (hold = o.hold || 2200) => runAuto(0, hold, false),
+    pause: () => eng.stopAuto(), play: () => { if (!auto) runAuto(cur, o.hold || 2200, autoMode === 'loop'); },
   };
   let resolveReady; api.ready = new Promise(r => resolveReady = r);
   ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  updPP();
   fontsReady().then(() => { go(+(QS.get('step') || 1) - 1); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; });
-    else if (o.autoplay && !RM && !QS.has('step') && !QS.has('static')) { const run = () => api.autoplay().then(() => { if (o.autoplay === 'loop' && auto) run(); }); run(); } });
+    else if (autoMode && !RM && !QS.has('step') && !QS.has('static')) runAuto(0, o.hold || 2200, autoMode === 'loop'); });
   return api;
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* Time an average reader needs for a caption: about 230 ms a word plus a second to find it. */
+const readMs = cap => 1000 + 230 * String(cap || '').split(/\s+/).filter(Boolean).length;
 
 /* ---------- player: a scrubbable timeline. frame(t, s) must draw the scene for time t from scratch,
    so pause, scrub, replay and recording all work for free. Chapters label stretches of the timeline. */
 function player(o) {
   const fr = frame(o.root, o, 'player'), eng = { gen: 0, timers: [], root: fr.root, act: null, cap: fr.cap, touched: false };
   const CH = o.chapters || [{ at: 0, title: o.title || '', cap: '' }], D = o.duration;
-  const range = fr.$('.kx-scrub input'), pp = fr.$('.kx-pp'), tm = fr.$('.kx-time');
-  range.max = D; let t = 0, playing = false, last = 0, chap = -1, speed = o.speed || 1;
-  fr.svg.innerHTML = (typeof o.scene === 'function' ? o.scene(K) : o.scene || '') + '<g class="kx-dyn"></g>';
-  const ctx = makeCtx(eng, fr.svg, 0); reveal(fr.svg);
-  CH.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to ' + (c.title || 'part ' + (i + 1))); b.innerHTML = '<i></i>'; b.onclick = () => { seek(c.at); play(); }; fr.dots.appendChild(b); });
-  fixCaptionHeight(fr, CH.map(c => c.cap || ''));
+  const range = fr.$('.kx-scrub input'), pp = fr.pp, tm = fr.$('.kx-time');
+  if (range) range.max = D; let t = 0, playing = false, last = 0, chap = -1, speed = o.speed || 1, holdUntil = 0, heldAt = -1, restart = false;
+  const looping = () => (o.loop != null ? !!o.loop : fr.ctl === 'none') && !REC;   // a player without controls starts again after a pause
+  // Pause at the end of each part while playing, long enough to read its caption, unless chapterHold is 0.
+  const holdFor = k => o.chapterHold === 0 ? 0 : typeof o.chapterHold === 'number' ? o.chapterHold : Math.min(8000, Math.max(1500, readMs(CH[k].cap) - (end(k) - CH[k].at) / speed));
+  const SPEEDS = o.speeds === false || fr.ctl !== 'full' ? null : o.speeds || [0.5, 1, 2];
+  if (SPEEDS) { const sb = document.createElement('button'); sb.type = 'button'; sb.className = 'kx-speed'; const lab = () => { sb.textContent = speed + '×'; sb.setAttribute('aria-label', 'Playback speed ' + speed + ' times'); };
+    lab(); sb.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length] || 1; lab(); eng.touched = true; }; tm.after(sb); }
+  let ctx = null;
+  function setup() { if (ctx) return; if (fr.endIntro) fr.endIntro(); fr.svg.innerHTML = (typeof o.scene === 'function' ? o.scene(K) : o.scene || '') + '<g class="kx-dyn"></g>'; ctx = makeCtx(eng, fr.svg, 0); reveal(fr.svg); }
+  if (fr.dots) CH.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to ' + (c.title || 'part ' + (i + 1))); b.innerHTML = '<i></i>'; b.onclick = () => { seek(c.at); play(); }; fr.dots.appendChild(b); });
+  const capsP = CH.map(c => c.cap || '').concat(o.intro ? [o.intro.cap || ''] : []), keysP = CH.map(c => c.keys), fitP = () => { fixCaptionHeight(fr, capsP); fixLegendHeight(fr, keysP); fixHeadHeight(fr, CH.map(c => c.title).concat(o.intro ? [o.intro.title || 'Before you start'] : []), ['Start here', `Part ${CH.length} of ${CH.length}`]); };
+  fitP(); fontsReady().then(fitP); addEventListener('resize', fitP);
   const chapterAt = x => { let k = 0; CH.forEach((c, i) => { if (x >= c.at) k = i; }); return k; };
-  function setChapter(k) { if (k === chap) return; chap = k; const c = CH[k]; fr.title.textContent = c.title || ''; fr.count.textContent = `Part ${k + 1} of ${CH.length}`; fr.cap.textContent = c.cap || ''; fr.svg.setAttribute('aria-label', (c.title || '') + '. ' + (c.alt || c.cap || '')); [...fr.dots.children].forEach((d, j) => j === k ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current')); fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !c.keys || c.keys.includes(e.dataset.l) ? '' : 'none'); }
-  function logTo(x) { if (!fr.log || !o.log) return; const L = o.log.filter(e => e.t <= x).slice(-6), key = L.map(e => e.t + e.text).join('|'); if (key === fr.log.dataset.k) return; fr.log.dataset.k = key; fr.log.innerHTML = L.map(e => `<div style="color:${col(e.c || 'mut')}">${esc(e.text)}</div>`).join(''); }
-  function draw() { range.value = t; tm.textContent = o.clock ? o.clock(t) : (t / 1000).toFixed(1) + ' s'; setChapter(chapterAt(t)); logTo(t); o.frame(t, ctx); }
-  function seek(x) { t = clamp(x, 0, D); draw(); }
-  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n; t += dt * speed; if (t >= D) { t = D; playing = false; updPP(); } draw(); if (playing) requestAnimationFrame(tick); }
+  function setChapter(k) { if (k === chap) return; chap = k; const c = CH[k]; fr.title.textContent = c.title || ''; fr.count.textContent = `Part ${k + 1} of ${CH.length}`; fr.cap.textContent = c.cap || ''; fr.svg.setAttribute('aria-label', (c.title || '') + '. ' + (c.alt || c.cap || '')); if (fr.dots) [...fr.dots.children].forEach((d, j) => j === k ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current')); fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !c.keys || c.keys.includes(e.dataset.l) ? '' : 'none'); }
+  function logTo(x) { if (!fr.log || !o.log) return; const from = o.logScope === 'all' ? -Infinity : CH[chapterAt(x)].at; const L = o.log.filter(e => e.t <= x && e.t >= from).slice(-6), key = L.map(e => e.t + e.text).join('|'); if (key === fr.log.dataset.k) return; fr.log.dataset.k = key; fr.log.innerHTML = L.map(e => `<div style="color:${col(e.c || 'mut')}">${esc(e.text)}</div>`).join(''); }
+  function draw() { setup(); if (range) range.value = t; if (tm) tm.textContent = o.clock ? o.clock(t) : (t / 1000).toFixed(1) + ' s'; setChapter(chapterAt(t)); logTo(t); o.frame(t, ctx); }
+  function seek(x) { t = clamp(x, 0, D); holdUntil = 0; heldAt = -1; restart = false; draw(); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n;
+    if (n < holdUntil) { requestAnimationFrame(tick); return; }
+    if (restart) { restart = false; t = 0; heldAt = -1; draw(); requestAnimationFrame(tick); return; }
+    const k = chapterAt(t), nt = t + dt * speed;
+    if (k < CH.length - 1 && k !== heldAt && nt >= end(k) && t < end(k)) { const h = holdFor(k); heldAt = k; if (h > 0) { t = end(k) - 1; holdUntil = n + h; draw(); requestAnimationFrame(tick); return; } }
+    t = nt; if (t >= D) { t = D; if (looping()) { holdUntil = n + Math.max(holdFor(CH.length - 1), o.hold || 2000); restart = true; } else { playing = false; updPP(); } } draw(); if (playing) requestAnimationFrame(tick); }
   function play() { if (t >= D) t = 0; if (RM) { seek(end(chapterAt(t)) - 1); return; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }  // reduced motion: jump to the end state of the chapter instead of animating
-  function pause() { playing = false; updPP(); }
-  function updPP() { pp.innerHTML = playing ? ICON.pause + 'Pause' : t >= D ? ICON.replay + 'Replay' : ICON.play + 'Play'; pp.setAttribute('aria-label', playing ? 'Pause' : 'Play'); }
+  function pause() { playing = false; holdUntil = 0; if (restart) { restart = false; t = 0; heldAt = -1; draw(); } updPP(); }
+  const PPL = [ICON.pause + 'Pause', ICON.replay + 'Replay', ICON.play + 'Play'];
+  function updPP() { pp.innerHTML = playing ? PPL[0] : t >= D ? PPL[1] : PPL[2]; pp.setAttribute('aria-label', playing ? 'Pause' : t >= D ? 'Replay' : 'Play'); }
   pp.onclick = () => playing ? pause() : play();
-  range.oninput = () => { pause(); seek(+range.value); };
-  fr.back.onclick = () => { seek(CH[Math.max(0, chapterAt(t) - (t - CH[chapterAt(t)].at < 600 ? 1 : 0))].at); };
-  fr.next.innerHTML = 'Next' + ICON.right; fr.next.onclick = () => { const k = chapterAt(t); seek(k < CH.length - 1 ? CH[k + 1].at : 0); play(); };
+  if (range) range.oninput = () => { pause(); seek(+range.value); };
+  if (fr.back) fr.back.onclick = () => { seek(CH[Math.max(0, chapterAt(t) - (t - CH[chapterAt(t)].at < 600 ? 1 : 0))].at); };
+  if (fr.next) { fr.next.innerHTML = 'Next' + ICON.right; fr.next.onclick = () => { const k = chapterAt(t); seek(k < CH.length - 1 ? CH[k + 1].at : 0); play(); }; }
+  fontsReady().then(() => fixWidth(pp, PPL));
   const end = i => i < CH.length - 1 ? CH[i + 1].at : D;
   const api = { kind: 'player', root: fr.root, get count() { return CH.length; }, get current() { return chapterAt(t); }, go: i => { seek(CH[i].at); play(); }, duration: i => (end(i) - CH[i].at) / speed, hasDemo: () => false, demo: () => Promise.resolve(), seek, play, pause, get time() { return t; },
     async autoplay() { seek(0); play(); while (t < D) await sleep(200); await sleep(o.hold || 2000); } };
   let resolveReady; api.ready = new Promise(r => resolveReady = r);
   ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
-  fontsReady().then(() => { const k = +(QS.get('step') || 1) - 1; seek(CH[Math.min(k, CH.length - 1)].at); updPP(); if (o.autoplay !== false && !QS.has('static')) play(); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  fontsReady().then(() => { introGate(fr, o, () => { const k = +(QS.get('step') || 1) - 1; seek(CH[Math.min(k, CH.length - 1)].at); updPP(); if ((o.autoplay !== false || o.intro) && !QS.has('static')) play(); }); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  return api;
+}
+
+/* ---------- figure: one standalone view, no steps. It sits in an article like a picture: a drawing that
+   reveals once, optional live controls in the action row (sliders, toggles, taps on the drawing), and an
+   optional looping animation, frame(t, s), drawn from the time t like a player, with a pause button.
+   Use it when the idea fits one view; use a stepper when the reader must see it built up. */
+function figure(o) {
+  const fr = frame(o.root, o, 'figure'), eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
+  const D = o.frame ? o.duration || 4000 : 0, loop = o.loop !== false && !REC;
+  let t = 0, playing = false, last = 0, holdUntil = 0, restart = false, ctx = null, revealEnd = 0, offscreen = false;
+  if (!o.title && !o.intro) fr.head.remove(); else fr.title.textContent = o.title || '';
+  if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
+  fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !o.keys || o.keys.includes(e.dataset.l) ? '' : 'none');
+  const caps = [o.cap || ''].concat(o.extraCaptions || [], o.intro ? [o.intro.cap || ''] : []);
+  fr.cap.textContent = o.cap || '';   // an empty caption is hidden, and a hidden one cannot be measured
+  if (caps.some(Boolean)) { const fit = () => { if (fr.cap.clientWidth) fixCaptionHeight(fr, caps); }; fit(); fontsReady().then(fit); addEventListener('resize', fit); }
+  const PPL = [ICON.pause + 'Pause', ICON.replay + 'Replay', ICON.play + 'Play'];
+  function updPP() { if (!fr.pp) return; fr.pp.innerHTML = playing ? PPL[0] : t >= D && !loop ? PPL[1] : PPL[2]; fr.pp.setAttribute('aria-label', playing ? 'Pause the animation' : 'Play the animation'); }
+  function drawAt(x) { t = clamp(x, 0, D); o.frame(t, ctx); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n;
+    if (n < holdUntil) { requestAnimationFrame(tick); return; }
+    if (restart) { restart = false; drawAt(0); requestAnimationFrame(tick); return; }
+    const nt = t + dt * (o.speed || 1);
+    if (nt >= D) { drawAt(D); if (loop) { holdUntil = n + (o.hold == null ? 1200 : o.hold); restart = true; } else { playing = false; updPP(); return; } }
+    else drawAt(nt);
+    requestAnimationFrame(tick); }
+  function play() { if (!o.frame || RM) return; if (t >= D) { t = 0; restart = false; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }
+  function pause() { playing = false; holdUntil = 0; updPP(); }
+  function build() {
+    if (fr.endIntro) fr.endIntro();
+    eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = []; eng.touched = false; playing = false; restart = false; holdUntil = 0;
+    if (o.title) fr.title.textContent = o.title; else if (fr.head.isConnected) fr.head.style.display = 'none'; fr.count.textContent = '';
+    fr.svg.innerHTML = (typeof o.draw === 'function' ? o.draw(K) : o.draw || '') + '<g class="kx-dyn"></g>';
+    fr.act.innerHTML = ''; fr.cap.textContent = o.cap || '';
+    fr.svg.setAttribute('aria-label', (o.title ? o.title + '. ' : '') + (o.alt || o.cap || ''));
+    if (o.reveal === false) { finish(fr.svg); revealEnd = 0; } else revealEnd = reveal(fr.svg);
+    ctx = makeCtx(eng, fr.svg, 0); eng.ctx = ctx;
+    if (o.start) o.start(ctx);
+    eng.inDemo = false;
+    if (o.demo && o.idleDemo && !REC) ctx.at(o.idleDemo, () => { if (!eng.touched) { eng.inDemo = true; Promise.resolve(o.demo(ctx)).finally(() => { eng.inDemo = false; }); } });
+    if (o.frame) { drawAt(RM ? (o.still == null ? D : o.still) : 0); if (!RM && o.autoplay !== false && !QS.has('static') && !offscreen) play(); else updPP(); }
+  }
+  if (fr.pp) { fr.pp.onclick = () => playing ? pause() : play(); fontsReady().then(() => fixWidth(fr.pp, PPL)); }
+  if (fr.replay) fr.replay.onclick = () => build();
+  // stop a looping animation while it is scrolled out of view, and start it again when it comes back
+  if (o.frame && !RM && 'IntersectionObserver' in window) new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting && playing) { offscreen = true; pause(); } else if (e.isIntersecting && offscreen) { offscreen = false; play(); } })).observe(fr.root);
+  const api = {
+    kind: 'figure', root: fr.root, count: 1, current: 0, go: () => build(),
+    duration: () => o.frame ? D / (o.speed || 1) : o.duration || revealEnd + 600, hasDemo: () => !!o.demo,
+    demo: () => ctx && o.demo ? Promise.resolve(o.demo(ctx)) : Promise.resolve(), demoDuration: () => o.demoDuration || 0,
+    play, pause, seek: x => { pause(); drawAt(x); updPP(); }, get time() { return t; },
+    async autoplay() { build(); await sleep(260 + api.duration()); if (o.demo) { await Promise.race([api.demo(), sleep(o.demoDuration || 12000)]); await sleep(600); } await sleep(o.hold || 2000); },
+  };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { introGate(fr, o, build); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
   return api;
 }
 
@@ -324,7 +514,7 @@ const fmt = {
 /* Wilson score interval for k successes in n trials (95% by default). Use it whenever a small sample is shown as a rate. */
 function wilson(k, n, z = 1.96) { if (!n) return [0, 1]; const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [Math.max(0, (c - m) / d), Math.min(1, (c + m) / d)]; }
 
-const K = { version: '1.0', NS, RM, C, STYLES, useStyle, rng, ease, clamp, lerp, f, esc, col, line, rect, ellipse, arrow, poly, curve, P, T, F, reveal, finish, mk, ICON, stepper, player, slider, toggle, grid, scale, fmt, wilson, sleep };
+const K = { version: '1.3', NS, RM, C, STYLES, useStyle, resolveStyle, rng, ease, clamp, lerp, f, esc, col, line, rect, ellipse, arrow, poly, curve, P, T, F, reveal, finish, mk, ICON, stepper, player, figure, slider, toggle, grid, scale, fmt, wilson, sleep };
 window.K = K;
 })();
 </script>
@@ -571,7 +761,7 @@ LOG.push({t: phaseStart('C') + 1, text: '  ··· all seven runs ···', c: 'mu
 LOG.sort((a, b) => a.t - b.t);
 
 const cap = [
-  `Two recorded runs of one task: a planner and three city helpers plan a 3-city trip. Each bar is a recorded model call (violet) or search (green), on one shared clock.`,
+  `Two recorded runs of the same task on one shared clock: sync handoff (wait for each helper) on top, async spawn (start all) below. Each bar is a model call (violet) or search (green).`,
   `Sync: the planner hands Lisbon to a helper and stops (amber stripes) until it answers. Async: it starts all three helpers by ${r0(asyncLastSpawn)} s and carries on.`,
   `Async: the planner searches flights while helpers find hotels. Their answers land at ${asyncAnswers.map(r0).join(', ')} s, while it is still busy. It never waits and finishes at ${r1(ASYNC.wall_s)} s.`,
   `Sync gets Rome back at ${r1(syncRome)} s, Prague at ${r1(syncPrague)} s, and only then searches flights. It waited ${r1(syncBlocked)} of ${r1(SYNC.wall_s)} s (${Math.round(syncBlocked / SYNC.wall_s * 100)}%): slower than one agent alone.`,
@@ -595,6 +785,39 @@ K.player({
     {at: CH[5], title: '6. The reply nobody read', cap: cap[5], keys: ['llm', 'tool', 'msg', 'fail']},
     {at: CH[6], title: '7. All seven runs', cap: cap[6], keys: ['llm', 'tool', 'wait']},
   ],
+  intro: {
+    title: 'One planner, three helpers',
+    cap: 'An AI planner splits a trip among three helper models, one city each. It can wait for each helper in turn, or start all three and keep working. Which is faster, and does every message arrive in time?',
+    alt: 'A task card reads: plan a trip to Lisbon, Rome and Prague. A planner, an AI model, sends tasks to three helpers, one for each city, and reads their answers. Each helper finds a hotel. Below, two ways to run it: wait for each helper, so the planner sits idle, or start all at once, so the planner books flights meanwhile. The question asks which is faster and whether every message arrives in time.',
+    start: 'Play the replay',
+    draw: K => {
+      const {P, T, line, arrow, rect} = K;
+      let m = T(190, 24, 'Task: plan a trip to Lisbon, Rome and Prague', {z: 15, t: 0}) +
+        P(rect(16, 52, 120, 80, 701), 'ink', 300, 500, 1.6) +
+        T(76, 86, 'planner', {h: 1, z: 26, t: 450}) +
+        T(76, 110, 'an AI model', {z: 14, c: 'mut', t: 550}) +
+        T(76, 152, 'sends tasks,', {z: 14, c: 'blue', t: 1300}) +
+        T(76, 169, 'reads answers', {z: 14, c: 'blue', t: 1350});
+      [['Lisbon', 38], ['Rome', 80], ['Prague', 122]].forEach(([city, y], i) => {
+        const t = 800 + i * 200, ye = y + 16;
+        m += P(line(140, 92, 230, ye, 702 + i, .8), 'blue', t, 300, 1.5) +
+          P(arrow(140, 92, 230, ye, 705 + i, 7), 'blue', t + 250, 120, 1.5) +
+          P(arrow(230, ye, 140, 92, 708 + i, 7), 'blue', t + 250, 120, 1.5) +
+          P(rect(234, y, 130, 32, 711 + i), 'ink', t + 100, 400, 1.4) +
+          T(299, y + 23, city + ' helper', {h: 1, z: 19, t: t + 250});
+      });
+      m += T(299, 172, 'each finds a hotel', {z: 14, c: 'mut', t: 1450}) +
+        P(rect(16, 184, 170, 46, 714), 'amber', 1700, 450, 1.4) +
+        T(101, 207, 'wait for each', {h: 1, z: 20, c: 'amber', t: 1850}) +
+        T(101, 224, 'planner sits idle', {z: 14, c: 'mut', t: 1950}) +
+        P(rect(196, 184, 168, 46, 715), 'ink', 2050, 450, 1.4) +
+        T(280, 207, 'start all at once', {h: 1, z: 20, t: 2200}) +
+        T(280, 224, 'planner books flights', {z: 14, c: 'mut', t: 2300}) +
+        T(190, 258, 'Which way is faster, and does every', {h: 1, z: 20, t: 2600}) +
+        T(190, 281, 'message arrive in time?', {h: 1, z: 20, t: 2700});
+      return m;
+    },
+  },
   log: LOG,
   clock: t => { const p = at(t); return p.ph === 'A' ? `${r1(p.r)} s · 8× speed` : p.ph === 'B' ? `${r1(p.r)} s · 4× speed` : 'summary'; },
   scene,

@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "visual-explainers",
-      "description": "Seven skills for animated and interactive explainers: plan the message, pick the form, build on a small SVG engine, check the layout at phone width, record GIF/MP4.",
+      "description": "Seven skills for animated and interactive explainers: plan the message and the opening, pick the form, build on a small SVG engine, check the layout at phone and laptop sizes, record GIF/MP4.",
       "source": "./",
       "category": "productivity",
       "homepage": "https://github.com/k-sandhu/visual-explainer-skills"
