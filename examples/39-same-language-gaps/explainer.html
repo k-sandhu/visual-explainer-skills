@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Same language, slower</title>
+<style>:root{color-scheme:dark}html,body{margin:0;background:#141517}body{padding:16px;min-height:100vh;box-sizing:border-box}</style>
+</head><body>
+<div id="x"></div>
+<script>
+/* explainer-kit v1. A small engine for animated, stepwise SVG explainers. No dependencies.
+   Exposes window.K. Read explainer-kit/SKILL.md for the API and the rules it encodes.
+   Every animation is tied to a "generation": moving to another step cancels all timers,
+   loops and tweens of the old step, so steps can never bleed into each other. */
+(function () {
+'use strict';
+const NS = 'http://www.w3.org/2000/svg';
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const QS = new URLSearchParams(location.search);
+const REC = QS.has('record');
+const f = n => (+n).toFixed(1);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = { inOut: k => k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2, out: k => 1 - Math.pow(1 - k, 3), linear: k => k };
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+function rng(seed) { let a = seed >>> 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+/* ---------- styles: one object per look. ink colours draw lines and text; fill colours encode data
+   (fills were checked for colour-blind separation against their background). */
+const STYLES = {
+  chalkboard: { dark: 1, bg: '#1E2023', panel: '#17191B', ink: '#ECE7DA', mut: '#9A9A93', faint: '#55585E', line: '#4A4D53',
+    blue: '#9CC3E6', green: '#A8DDC3', amber: '#F2D98B', violet: '#C3B5E8', red: '#EBA494',
+    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    rough: 1, texture: 1, hand: "'Caveat', cursive", handSize: 1.12, font: 'https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap' },
+  paper: { dark: 0, bg: '#FBF8F1', panel: '#F3EEE3', ink: '#22252A', mut: '#5F6368', faint: '#C9C3B6', line: '#BDB6A8',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    rough: .7, texture: 0, hand: "'Kalam', cursive", handSize: 1, font: 'https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&display=swap' },
+  editorial: { dark: 0, bg: '#FFFFFF', panel: '#F5F5F2', ink: '#1A1A1A', mut: '#5C5C5C', faint: '#D6D6D0', line: '#C4C4BE',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    rough: 0, texture: 0, hand: "'Source Serif 4', Georgia, serif", handSize: .9, font: 'https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&display=swap' },
+  blueprint: { dark: 1, bg: '#10243A', panel: '#0C1C2E', ink: '#E6EEF5', mut: '#93A8BC', faint: '#3A5672', line: '#4A6A89',
+    blue: '#8EC5F0', green: '#9BE0C0', amber: '#F5D58A', violet: '#C9B8F2', red: '#F2A08F',
+    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    rough: 0, texture: 0, grid: 1, hand: "'IBM Plex Mono', ui-monospace, monospace", handSize: .78, font: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap' },
+};
+let ST = STYLES.chalkboard, ROUGH = 1;
+const C = {};                                   // active colours, e.g. K.C.ink, K.C.fill.blue
+function col(c) { if (!c) return C.ink; if (c[0] === '#' || c.startsWith('rgb') || c === 'none' || c === 'transparent') return c; if (c.startsWith('fill.')) return C.fill[c.slice(5)] || c; return C[c] || c; }
+function useStyle(name, root) {
+  ST = STYLES[name] || STYLES.chalkboard; ROUGH = ST.rough;
+  Object.keys(C).forEach(k => delete C[k]); Object.assign(C, ST, { fill: { ...ST.fill } });
+  injectCSS();
+  if (ST.font && !document.querySelector(`link[href="${ST.font}"]`)) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = ST.font; document.head.appendChild(l); }
+  if (root) {
+    const v = { bg: ST.bg, panel: ST.panel, ink: ST.ink, mut: ST.mut, faint: ST.faint, line: ST.line, blue: ST.blue, green: ST.green, amber: ST.amber, violet: ST.violet, red: ST.red, hand: ST.hand };
+    for (const k in v) root.style.setProperty('--k-' + k, v[k]);
+    root.classList.add('kx', 'kx-' + (name in STYLES ? name : 'chalkboard'));
+    if (ST.texture) { const r = rng(9); let s = ''; for (let i = 0; i < 140; i++) s += `<circle cx='${(r() * 240).toFixed(1)}' cy='${(r() * 240).toFixed(1)}' r='${(.4 + r() * .8).toFixed(2)}' fill='%23ffffff' fill-opacity='${(.02 + r() * .045).toFixed(3)}'/>`; root.style.backgroundImage = `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>${s}</svg>")`; }
+    if (ST.grid) root.style.backgroundImage = `linear-gradient(${ST.faint}55 1px,transparent 1px),linear-gradient(90deg,${ST.faint}55 1px,transparent 1px)`, root.style.backgroundSize = '20px 20px';
+  }
+  return ST;
+}
+function fontsReady(ms = 1500) { return Promise.race([document.fonts ? document.fonts.ready.then(() => document.fonts.load(`20px ${ST.hand.split(',')[0]}`)) : Promise.resolve(), new Promise(r => setTimeout(r, ms))]).catch(() => {}); }
+
+/* ---------- hand-drawn geometry. Each shape takes a seed so its wobble is identical on every frame. */
+const J = (r, a) => (r() - .5) * 2 * a * ROUGH;
+function line(x1, y1, x2, y2, seed = 1, bow = 1.6) { const r = rng(seed); return `M${f(x1 + J(r, .5))} ${f(y1 + J(r, .5))} Q${f((x1 + x2) / 2 + J(r, bow))} ${f((y1 + y2) / 2 + J(r, bow))} ${f(x2)} ${f(y2)}`; }
+function rect(x, y, w, h, seed = 1) {
+  if (!ROUGH) return `M${f(x)} ${f(y)}H${f(x + w)}V${f(y + h)}H${f(x)}Z`;
+  const r = rng(seed), p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(q => [q[0] + J(r, 1.3), q[1] + J(r, 1.3)]);
+  let d = `M${f(p[0][0])} ${f(p[0][1])}`;
+  for (let i = 0; i < 4; i++) { const A = p[i], B = p[(i + 1) % 4]; d += ` Q${f((A[0] + B[0]) / 2 + J(r, 1.5))} ${f((A[1] + B[1]) / 2 + J(r, 1.5))} ${f(B[0])} ${f(B[1])}`; }
+  return d + ` L${f(p[0][0] + (p[1][0] - p[0][0]) * .08)} ${f(p[0][1] + J(r, 1))}`;
+}
+function ellipse(cx, cy, rx, ry = rx, seed = 1) { const r = rng(seed); return `M${f(cx - rx)} ${f(cy)} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx + rx)} ${f(cy + J(r, .6))} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx - rx + 1.5 * ROUGH)} ${f(cy + .6 * ROUGH)}`; }
+function arrow(fx, fy, x, y, seed = 1, L = 8) { const a = Math.atan2(y - fy, x - fx), r = rng(seed), k = .5 + J(r, .06); return `M${f(x - L * Math.cos(a - k))} ${f(y - L * Math.sin(a - k))} L${f(x)} ${f(y)} L${f(x - L * Math.cos(a + k))} ${f(y - L * Math.sin(a + k))}`; }
+function poly(pts, seed = 1) { const r = rng(seed); return 'M' + pts.map((p, i) => `${f(p[0] + (i ? J(r, .6) : 0))} ${f(p[1] + (i ? J(r, .6) : 0))}`).join(' L'); }
+function curve(x1, y1, x2, y2, bend = .3) { const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1; return `M${f(x1)} ${f(y1)} Q${f(mx - dy * bend)} ${f(my + dx * bend)} ${f(x2)} ${f(y2)}`; }
+
+/* ---------- markup builders. Elements carry data-k (draw|fade), data-t (delay ms) and data-d (duration ms);
+   the engine reveals them in that order when a step opens, and shows them at once with reduced motion. */
+function P(d, c, t = 0, du = 600, w = 1.5, extra = '') { return `<path d="${d}" fill="none" stroke="${col(c)}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" data-k="draw" data-t="${t}" data-d="${du}" ${extra}/>`; }
+function T(x, y, s, o = {}) {
+  const fam = o.h ? 'var(--k-hand)' : o.m ? 'var(--font-mono, ui-monospace, Menlo, monospace)' : 'var(--font-sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif)';
+  const z = (o.z || 12) * (o.h ? ST.handSize : 1);
+  return `<text${o.id ? ` id="${o.id}"` : ''} x="${x}" y="${y}" text-anchor="${o.a || 'middle'}" font-size="${f(z)}"${o.w ? ` font-weight="${o.w}"` : ''} fill="${col(o.c)}" style="font-family:${fam};font-variant-numeric:tabular-nums" data-k="fade" data-t="${o.t || 0}" data-d="${o.d || 450}"${o.extra ? ' ' + o.extra : ''}>${o.raw ? s : esc(s)}</text>`;
+}
+function F(shape, c, t = 0, o = {}) { return `<path d="${shape}" fill="${col(c)}" fill-opacity="${o.op == null ? .85 : o.op}" stroke="none" data-k="fade" data-t="${t}" data-d="${o.d || 450}"${o.id ? ` id="${o.id}"` : ''}/>`; }
+function reveal(svg) {
+  const els = [...svg.querySelectorAll('[data-k]')];
+  if (RM) { els.forEach(e => { e.style.opacity = 1; e.style.strokeDashoffset = 0; }); return 0; }
+  let end = 0;
+  els.forEach(e => { e.style.transition = 'none'; const t = +e.dataset.t, d = +e.dataset.d; end = Math.max(end, t + d); if (e.dataset.k === 'draw') { const L = e.getTotalLength() + 1; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; } else e.style.opacity = 0; });
+  svg.getBoundingClientRect();
+  requestAnimationFrame(() => requestAnimationFrame(() => els.forEach(e => { const t = e.dataset.t, d = e.dataset.d; if (e.dataset.k === 'draw') { e.style.transition = `stroke-dashoffset ${d}ms cubic-bezier(.45,0,.55,1) ${t}ms`; e.style.strokeDashoffset = 0; } else { e.style.transition = `opacity ${d}ms ease ${t}ms`; e.style.opacity = 1; } })));
+  return end;
+}
+function finish(svg) { svg.querySelectorAll('[data-k]').forEach(e => { e.style.transition = 'none'; e.style.strokeDashoffset = 0; e.style.opacity = 1; }); }
+
+/* ---------- small DOM helpers */
+function mk(tag, attrs = {}, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+const ICON = {
+  left: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  right: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  play: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>',
+  replay: '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12l5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+let cssDone = false;
+function injectCSS() {
+  if (cssDone) return; cssDone = true;
+  const s = document.createElement('style');
+  s.textContent = `.kx{background-color:var(--k-bg);color:var(--k-ink);border-radius:16px;padding:14px 10px 12px;font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);max-width:560px;margin:0 auto;position:relative;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+.kx *{box-sizing:border-box}.kx svg.kx-stage{display:block;width:100%;height:auto;overflow:visible;transition:opacity .22s ease}
+.kx-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 6px;min-height:28px}
+.kx-title{font-family:var(--k-hand);font-size:23px;line-height:1.15}.kx-blueprint .kx-title,.kx-editorial .kx-title{font-size:19px}
+.kx-count{font-size:11px;color:var(--k-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.kx-cap{font-size:13.5px;line-height:1.55;margin:6px 8px 8px;color:var(--k-ink)}
+.kx-act{display:flex;justify-content:center;align-items:center;gap:8px;min-height:44px;flex-wrap:wrap;margin:0 4px 4px}
+.kx-legend{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px 12px;font-size:12px;color:var(--k-mut);margin:6px 8px 8px;min-height:40px}.kx-legend>span{transition:opacity .4s}
+.kx-sw{display:inline-block;width:12px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.kx-nav{display:flex;align-items:center;gap:8px}.kx button.kx-next{min-width:112px}.kx-act .kx-ctl{flex:1 1 100%}
+@media (max-width:480px){.kx{padding:12px 8px 10px}.kx button.kx-next{min-width:96px;padding:0 8px}.kx button.kx-dot{padding:10px 3px}.kx-nav{gap:6px}}
+.kx button{background:transparent;border:1px solid var(--k-line);color:var(--k-ink);border-radius:8px;padding:0 12px;font:inherit;font-size:13px;min-height:40px;min-width:40px;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}
+.kx button:hover{border-color:var(--k-mut)}.kx button:focus-visible,.kx [role=button]:focus-visible{outline:2px solid var(--k-violet);outline-offset:2px}
+.kx button.pri{border-color:var(--k-violet);color:var(--k-violet)}.kx button[aria-pressed=true]{background:color-mix(in srgb,var(--k-violet) 18%,transparent)}
+.kx-dots{display:flex;flex:1;justify-content:center;flex-wrap:nowrap;min-width:0}
+.kx button.kx-dot{padding:10px 5px;border:0;min-height:0;min-width:0;background:none}
+.kx-dot i{width:8px;height:8px;border-radius:50%;border:1px solid var(--k-mut);display:inline-block}.kx-dot[aria-current=step] i{background:var(--k-ink);border-color:var(--k-ink)}
+.kx-log{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:11px;line-height:17px;height:92px;overflow:hidden;background:var(--k-panel);border:1px solid var(--k-line);border-radius:8px;padding:6px 8px;margin:8px 4px 0;display:flex;flex-direction:column;justify-content:flex-end;white-space:pre-wrap}
+.kx-scrub{display:flex;align-items:center;gap:8px;margin:6px 4px}.kx-scrub input{flex:1}
+.kx-time{font-size:11px;color:var(--k-mut);min-width:64px;text-align:right;font-variant-numeric:tabular-nums}
+.kx input[type=range]{accent-color:var(--k-violet);height:32px;width:100%;margin:0}
+.kx-ctl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:12.5px;margin:4px 8px}.kx-ctl output{font-variant-numeric:tabular-nums;color:var(--k-ink);font-weight:600}.kx-ctl input{grid-column:1/3}
+.kx .pulse{animation:kxpl 1.2s ease-in-out 1 forwards}@keyframes kxpl{0%,100%{opacity:0}50%{opacity:.85}}
+.kx-ripple{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;border:2px solid var(--k-ink);pointer-events:none;animation:kxrp .6s ease-out forwards}@keyframes kxrp{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
+.kx-recording .kx-nav button:not(.kx-dot),.kx-recording .kx-scrub button{visibility:hidden}
+.kx .sr-only,.sr-only{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.kx *{transition:none!important;animation:none!important}}`;
+  document.head.appendChild(s);
+}
+
+/* ---------- step context: everything a step needs, bound to its generation */
+function makeCtx(eng, svg, i) {
+  const g = eng.gen, alive = () => g === eng.gen, dyn = svg.querySelector('.kx-dyn');
+  const q = s => svg.querySelector(s);
+  const pick = e => typeof e === 'string' ? q(e) : e;
+  const s = {
+    i, svg, dyn, q, alive, C, RM, root: eng.root, act: eng.act,
+    at(ms, fn) { const id = setTimeout(() => { if (alive()) fn(); }, ms); eng.timers.push(id); return id; },
+    wait(ms) { return new Promise(r => s.at(ms, () => { if (!(eng.inDemo && eng.touched)) r(); })); },   // an idle demo stops for good once the reader acts
+    loop(delay, fn) { s.at(delay, () => { let last = performance.now(); const t0 = last, st = {}; const k = n => { if (!alive()) return; st.dt = Math.min(.05, Math.max(0, (n - last) / 1000)); last = n; st.e = n - t0; if (fn(st) !== false) requestAnimationFrame(k); }; requestAnimationFrame(k); }); },
+    tween(du, fn, o = {}) { const ez = ease[o.ease || 'inOut']; return new Promise(res => s.at(o.delay || 0, () => { if (RM || du <= 0) { fn(1); res(); return; } const t0 = performance.now(); const k = n => { if (!alive()) return; const p = clamp((n - t0) / du); fn(ez(p)); if (p < 1) requestAnimationFrame(k); else res(); }; requestAnimationFrame(k); })); },
+    el(tag, attrs, parent) { return mk(tag, attrs, parent || dyn); },
+    drawIn(e, du = 500, delay = 0) { e = pick(e); if (!e || RM) return; const L = e.getTotalLength() + 1; e.style.transition = 'none'; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; e.getBoundingClientRect(); e.style.transition = `stroke-dashoffset ${du}ms cubic-bezier(.45,0,.55,1) ${delay}ms`; e.style.strokeDashoffset = 0; },
+    fadeIn(e, du = 400, delay = 0) { e = pick(e); if (!e) return; e.style.transition = 'none'; e.style.opacity = 0; e.getBoundingClientRect(); e.style.transition = `opacity ${du}ms ease ${delay}ms`; e.style.opacity = 1; },
+    fadeOut(e, du = 400, remove = true) { e = pick(e); if (!e) return; e.style.transition = `opacity ${du}ms`; e.style.opacity = 0; if (remove) setTimeout(() => e.remove(), du + 50); },
+    travel(path, du = 600, c = 'ink', o = {}) {   // a dot that moves along a path element or a list of points
+      let p = pick(path), temp = false;
+      if (Array.isArray(path)) { p = mk('path', { d: 'M' + path.map(q => q.join(' ')).join(' L'), fill: 'none', stroke: col(c), 'stroke-width': 1.6, 'stroke-opacity': o.trail === false ? 0 : .5, 'stroke-linecap': 'round' }, dyn); temp = true; if (o.trail !== false) s.drawIn(p, du); }
+      const d = mk('circle', { r: o.r || 3.6, fill: col(c) }, dyn), L = p.getTotalLength();
+      const done = () => { s.fadeOut(d, 300); if (temp && !o.keep) setTimeout(() => s.fadeOut(p, 450), 200); };
+      if (RM) { const e = p.getPointAtLength(L); d.setAttribute('cx', e.x); d.setAttribute('cy', e.y); done(); return Promise.resolve(); }
+      return s.tween(du, k => { const e = p.getPointAtLength(k * L); d.setAttribute('cx', f(e.x)); d.setAttribute('cy', f(e.y)); }, { delay: o.delay || 0 }).then(done);
+    },
+    ring(x, y, w, h, c = 'ink', o = {}) { const p = mk('path', { d: rect(x, y, w, h, Math.round(x * 7 + y)), fill: 'none', stroke: col(c), 'stroke-width': o.w || 2.4, 'stroke-linecap': 'round', class: 'pulse' }, dyn); p.style.opacity = 0; setTimeout(() => p.remove(), 1400); return p; },
+    write(x, y, text, o = {}) { const w = document.createElementNS(NS, 'g'); w.innerHTML = T(x, y, text, o); const t = w.firstChild; dyn.appendChild(t); t.removeAttribute('data-k'); s.fadeIn(t, o.d || 450, o.t || 0); return t; },
+    float(x, y, text, c = 'ink', z = 16) { const t = s.write(x, y, text, { h: 1, z, c }); if (!RM) { t.style.transition = 'transform 1.1s ease-out, opacity 1.1s ease-out'; requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transform = 'translateY(-18px)'; t.style.opacity = 0; })); } setTimeout(() => t.remove(), 1200); },
+    swap(e, text, c) { e = pick(e); if (!e) return; e.style.transition = 'opacity .15s'; e.style.opacity = 0; s.at(160, () => { e.textContent = text; if (c) e.setAttribute('fill', col(c)); e.style.opacity = 1; }); },
+    count(e, to, o = {}) { e = pick(e); if (!e) return; const from = o.from != null ? o.from : (+e.dataset.v || 0), fmt = o.fmt || (v => Math.round(v).toLocaleString()); e.dataset.v = to; return s.tween(o.du || 900, k => { e.textContent = (o.pre || '') + fmt(lerp(from, to, k)) + (o.post || ''); }, { delay: o.delay || 0 }); },
+    bar(e, frac, du = 600, axis = 'x') { e = pick(e); if (!e) return; e.style.transformBox = 'fill-box'; e.style.transformOrigin = axis === 'x' ? '0 50%' : '50% 100%'; e.style.transition = RM ? 'none' : `transform ${du}ms cubic-bezier(.45,0,.55,1)`; e.style.transform = axis === 'x' ? `scaleX(${clamp(frac).toFixed(4)})` : `scaleY(${clamp(frac).toFixed(4)})`; },
+    btn(icon, label, fn, o = {}) { const b = document.createElement('button'); if (o.primary) b.className = 'pri'; b.innerHTML = (ICON[icon] || '') + esc(label); b.type = 'button'; b.onclick = e => { if (e.isTrusted) s.touched(); fn(b); }; eng.act.appendChild(b); return b; },
+    on(e, fn, label) { e = pick(e); e.setAttribute('role', 'button'); e.setAttribute('tabindex', '0'); if (label) e.setAttribute('aria-label', label); e.style.cursor = 'pointer'; const h = ev => { if (ev.isTrusted) s.touched(); fn(ev); }; e.addEventListener('click', h); e.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); h(ev); } }); return e; },
+    point(ev) { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const m = svg.getScreenCTM(); return m ? pt.matrixTransform(m.inverse()) : { x: 0, y: 0 }; },
+    drag(e, o) { e = pick(e); e.style.touchAction = 'none'; e.style.cursor = 'grab'; let on = false; e.addEventListener('pointerdown', ev => { on = true; e.setPointerCapture(ev.pointerId); s.touched(); o.move && o.move(s.point(ev), ev); }); e.addEventListener('pointermove', ev => { if (on && alive()) o.move && o.move(s.point(ev), ev); }); const up = ev => { if (!on) return; on = false; o.end && o.end(s.point(ev), ev); }; e.addEventListener('pointerup', up); e.addEventListener('pointercancel', up); return e; },
+    cap(text) { eng.cap.textContent = text; },
+    touched() { eng.touched = true; if (eng.stopAuto && !REC) eng.stopAuto(); },   // a reader who acts takes over from autoplay
+    tap(e) { e = pick(e); if (!e || !alive() || (eng.inDemo && eng.touched)) return; const r = e.getBoundingClientRect(), R = eng.root.getBoundingClientRect(), d = document.createElement('div'); d.className = 'kx-ripple'; d.style.left = (r.left + r.width / 2 - R.left) + 'px'; d.style.top = (r.top + r.height / 2 - R.top) + 'px'; eng.root.appendChild(d); setTimeout(() => d.remove(), 650); e.dispatchEvent(new MouseEvent('click', { bubbles: true })); },
+    /* unit charts: one circle per item, keyed, so items keep their identity when they move */
+    units(items, o = {}) { const gU = mk('g', { class: 'kx-units' }, o.parent || dyn); s._units = items.map((it, j) => { const c = mk('circle', { cx: o.x0 || 0, cy: o.y0 || 0, r: o.r || 4, fill: col(o.fill || 'fill.blue') }, gU); c.style.transition = 'fill .5s, opacity .5s'; return { it, c, x: o.x0 || 0, y: o.y0 || 0, r: o.r || 4, j }; }); return s._units; },
+    arrange(layout, o = {}) { const U = s._units || [], du = o.du || 900, stg = o.stagger == null ? 4 : o.stagger, ez = ease[o.ease || 'inOut'];
+      const tg = U.map((u, j) => { const L = layout(u.it, j) || {}; if (L.fill) u.c.style.fill = col(L.fill); if (L.opacity != null) u.c.style.opacity = L.opacity; return { x0: u.x, y0: u.y, r0: u.r, x: L.x == null ? u.x : L.x, y: L.y == null ? u.y : L.y, r: L.r == null ? u.r : L.r, dl: (L.order == null ? j : L.order) * stg }; });
+      const tot = du + Math.max(0, ...tg.map(t => t.dl));
+      return s.tween(tot, k => { const ms = k * tot; U.forEach((u, j) => { const t = tg[j], p = ez(clamp((ms - t.dl) / du)); u.x = lerp(t.x0, t.x, p); u.y = lerp(t.y0, t.y, p); u.r = lerp(t.r0, t.r, p); u.c.setAttribute('cx', f(u.x)); u.c.setAttribute('cy', f(u.y)); u.c.setAttribute('r', f(u.r)); }); }, { ease: 'linear', delay: o.delay || 0 }); },
+  };
+  return s;
+}
+
+/* ---------- stepper: a lesson that moves one idea at a time, with fixed controls */
+const ALL = (window.EXPLAINERS = window.EXPLAINERS || []);
+function frame(root, o, kind) {
+  root = typeof root === 'string' ? document.querySelector(root) : root;
+  useStyle(o.style || 'chalkboard', root);
+  const [W, H] = o.viewBox || [380, 300];
+  const legend = (o.legend || []).map(l => `<span data-l="${l.key}"><span class="kx-sw" style="background:${col(l.color)}"></span>${esc(l.label)}</span>`).join('');
+  root.innerHTML = `<h2 class="sr-only">${esc(o.title || '')}</h2><div class="kx-head"><span class="kx-title"></span><span class="kx-count"></span></div>
+<svg class="kx-stage" viewBox="0 0 ${W} ${H}" role="img"></svg><p class="kx-cap" aria-live="polite"></p>${kind === 'player' && o.log ? '<div class="kx-log" aria-hidden="true"></div>' : ''}
+${kind === 'player' ? '<div class="kx-scrub"><button class="kx-pp" type="button"></button><input type="range" min="0" step="1" aria-label="Scrub the timeline"><span class="kx-time"></span></div>' : '<div class="kx-act"></div>'}
+${legend ? `<div class="kx-legend">${legend}</div>` : ''}<div class="kx-nav"><button class="kx-back" type="button" aria-label="Previous">${ICON.left}</button><div class="kx-dots"></div>${kind === 'stepper' ? `<button class="kx-replay" type="button" aria-label="Replay this step" title="Replay this step">${ICON.replay}</button>` : ''}<button class="kx-next" type="button"></button></div>`;
+  if (REC) root.classList.add('kx-recording');
+  const $ = s => root.querySelector(s);
+  return { root, W, H, svg: $('.kx-stage'), cap: $('.kx-cap'), act: $('.kx-act'), title: $('.kx-title'), count: $('.kx-count'), dots: $('.kx-dots'), next: $('.kx-next'), back: $('.kx-back'), replay: $('.kx-replay'), log: $('.kx-log'), $ };
+}
+function fixCaptionHeight(fr, texts) {   // reserve the tallest caption so nothing below it ever moves
+  const m = fr.cap.cloneNode(); m.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;min-height:0;width:${fr.cap.clientWidth}px`; m.removeAttribute('aria-live'); fr.cap.parentNode.appendChild(m);
+  let h = 0; texts.forEach(t => { m.textContent = t; h = Math.max(h, m.offsetHeight); }); m.remove(); fr.cap.style.minHeight = h + 'px';
+}
+function stepper(o) {
+  const fr = frame(o.root, o, 'stepper'), S = o.steps;
+  if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
+  const eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
+  let cur = 0, first = true, auto = null, ends = [];
+  eng.stopAuto = () => { auto = null; };
+  S.forEach((st, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to step ' + (i + 1)); b.innerHTML = '<i></i>'; b.onclick = () => go(i); fr.dots.appendChild(b); });
+  const capTexts = S.map(st => st.cap || '').concat(o.extraCaptions || []);
+  fixCaptionHeight(fr, capTexts); addEventListener('resize', () => fixCaptionHeight(fr, capTexts));
+  function build(i) {
+    cur = i; eng.touched = false; const st = S[i], s = {};
+    fr.svg.innerHTML = (typeof st.draw === 'function' ? st.draw(K) : st.draw || '') + '<g class="kx-dyn"></g>';
+    fr.act.innerHTML = ''; fr.title.textContent = st.title || ''; fr.count.textContent = `Step ${i + 1} of ${S.length}`;
+    fr.svg.setAttribute('aria-label', (st.title || '') + '. ' + (st.alt || st.cap || ''));
+    [...fr.dots.children].forEach((d, j) => j === i ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'));
+    fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !st.keys || st.keys.includes(e.dataset.l) ? '' : 'none');   // only this step's colours
+    fr.next.innerHTML = i === S.length - 1 ? ICON.restart + 'Start over' : 'Next' + ICON.right;
+    fr.cap.style.transition = 'none'; fr.cap.style.opacity = 0; fr.cap.textContent = st.cap || '';
+    const revealEnd = reveal(fr.svg);
+    const ctx = makeCtx(eng, fr.svg, i);
+    ctx.at(st.capDelay == null ? 300 : st.capDelay, () => { fr.cap.style.transition = 'opacity .6s'; fr.cap.style.opacity = 1; });
+    if (st.start) st.start(ctx);
+    eng.inDemo = false;
+    if (st.demo && st.idleDemo && !REC && !st.ask) ctx.at(st.idleDemo, () => { if (!eng.touched) { eng.inDemo = true; Promise.resolve(st.demo(ctx)).finally(() => { eng.inDemo = false; }); } });
+    ends[i] = st.duration || revealEnd + 600;
+    eng.ctx = ctx;
+  }
+  function go(i, keepAuto) {
+    if (!keepAuto) auto = null;
+    eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = [];
+    i = Math.max(0, Math.min(S.length - 1, i));
+    const g = eng.gen;
+    if (first || RM) { first = false; build(i); fr.svg.style.opacity = 1; }
+    else { fr.svg.style.opacity = 0; setTimeout(() => { if (g === eng.gen) { build(i); fr.svg.style.opacity = 1; } }, 230); }
+  }
+  fr.back.onclick = () => go(cur - 1);
+  fr.next.onclick = () => go(cur < S.length - 1 ? cur + 1 : 0);
+  fr.replay.onclick = () => go(cur);
+  document.addEventListener('keydown', e => { if (e.target.closest && e.target.closest('[role=button],input,button,textarea,select')) return; if (ALL.length > 1 && !fr.root.contains(document.activeElement)) return; if (e.key === 'ArrowRight') go(cur + 1); if (e.key === 'ArrowLeft') go(cur - 1); });
+  const api = {
+    kind: 'stepper', root: fr.root, get count() { return S.length; }, get current() { return cur; },
+    go: i => go(i), duration: i => S[i].duration || ends[i] || 4000, hasDemo: i => !!S[i].demo,
+    demo: i => { const c = eng.ctx; return c && c.i === i && S[i].demo ? Promise.resolve(S[i].demo(c)) : Promise.resolve(); },
+    demoDuration: i => S[i].demoDuration || 0,
+    async autoplay(hold = o.hold || 2200) { const me = auto = {}; for (let i = 0; i < S.length; i++) { if (auto !== me) return; go(i, true); await sleep(260 + api.duration(i)); if (auto !== me) return; if (S[i].demo) { await Promise.race([api.demo(i), sleep(S[i].demoDuration || 12000)]); await sleep(S[i].demoDuration ? 0 : 600); } await sleep(hold); } },
+  };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { go(+(QS.get('step') || 1) - 1); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; });
+    else if (o.autoplay && !RM && !QS.has('step') && !QS.has('static')) { const run = () => api.autoplay().then(() => { if (o.autoplay === 'loop' && auto) run(); }); run(); } });
+  return api;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- player: a scrubbable timeline. frame(t, s) must draw the scene for time t from scratch,
+   so pause, scrub, replay and recording all work for free. Chapters label stretches of the timeline. */
+function player(o) {
+  const fr = frame(o.root, o, 'player'), eng = { gen: 0, timers: [], root: fr.root, act: null, cap: fr.cap, touched: false };
+  const CH = o.chapters || [{ at: 0, title: o.title || '', cap: '' }], D = o.duration;
+  const range = fr.$('.kx-scrub input'), pp = fr.$('.kx-pp'), tm = fr.$('.kx-time');
+  range.max = D; let t = 0, playing = false, last = 0, chap = -1, speed = o.speed || 1;
+  fr.svg.innerHTML = (typeof o.scene === 'function' ? o.scene(K) : o.scene || '') + '<g class="kx-dyn"></g>';
+  const ctx = makeCtx(eng, fr.svg, 0); reveal(fr.svg);
+  CH.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to ' + (c.title || 'part ' + (i + 1))); b.innerHTML = '<i></i>'; b.onclick = () => { seek(c.at); play(); }; fr.dots.appendChild(b); });
+  fixCaptionHeight(fr, CH.map(c => c.cap || ''));
+  const chapterAt = x => { let k = 0; CH.forEach((c, i) => { if (x >= c.at) k = i; }); return k; };
+  function setChapter(k) { if (k === chap) return; chap = k; const c = CH[k]; fr.title.textContent = c.title || ''; fr.count.textContent = `Part ${k + 1} of ${CH.length}`; fr.cap.textContent = c.cap || ''; fr.svg.setAttribute('aria-label', (c.title || '') + '. ' + (c.alt || c.cap || '')); [...fr.dots.children].forEach((d, j) => j === k ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current')); fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !c.keys || c.keys.includes(e.dataset.l) ? '' : 'none'); }
+  function logTo(x) { if (!fr.log || !o.log) return; const L = o.log.filter(e => e.t <= x).slice(-6), key = L.map(e => e.t + e.text).join('|'); if (key === fr.log.dataset.k) return; fr.log.dataset.k = key; fr.log.innerHTML = L.map(e => `<div style="color:${col(e.c || 'mut')}">${esc(e.text)}</div>`).join(''); }
+  function draw() { range.value = t; tm.textContent = o.clock ? o.clock(t) : (t / 1000).toFixed(1) + ' s'; setChapter(chapterAt(t)); logTo(t); o.frame(t, ctx); }
+  function seek(x) { t = clamp(x, 0, D); draw(); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n; t += dt * speed; if (t >= D) { t = D; playing = false; updPP(); } draw(); if (playing) requestAnimationFrame(tick); }
+  function play() { if (t >= D) t = 0; if (RM) { seek(end(chapterAt(t)) - 1); return; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }  // reduced motion: jump to the end state of the chapter instead of animating
+  function pause() { playing = false; updPP(); }
+  function updPP() { pp.innerHTML = playing ? ICON.pause + 'Pause' : t >= D ? ICON.replay + 'Replay' : ICON.play + 'Play'; pp.setAttribute('aria-label', playing ? 'Pause' : 'Play'); }
+  pp.onclick = () => playing ? pause() : play();
+  range.oninput = () => { pause(); seek(+range.value); };
+  fr.back.onclick = () => { seek(CH[Math.max(0, chapterAt(t) - (t - CH[chapterAt(t)].at < 600 ? 1 : 0))].at); };
+  fr.next.innerHTML = 'Next' + ICON.right; fr.next.onclick = () => { const k = chapterAt(t); seek(k < CH.length - 1 ? CH[k + 1].at : 0); play(); };
+  const end = i => i < CH.length - 1 ? CH[i + 1].at : D;
+  const api = { kind: 'player', root: fr.root, get count() { return CH.length; }, get current() { return chapterAt(t); }, go: i => { seek(CH[i].at); play(); }, duration: i => (end(i) - CH[i].at) / speed, hasDemo: () => false, demo: () => Promise.resolve(), seek, play, pause, get time() { return t; },
+    async autoplay() { seek(0); play(); while (t < D) await sleep(200); await sleep(o.hold || 2000); } };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { const k = +(QS.get('step') || 1) - 1; seek(CH[Math.min(k, CH.length - 1)].at); updPP(); if (o.autoplay !== false && !QS.has('static')) play(); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  return api;
+}
+
+/* ---------- controls for explorables */
+let uid = 0;
+function slider(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent; const id = 'kx' + (++uid);
+  const w = document.createElement('div'); w.className = 'kx-ctl';
+  w.innerHTML = `<label for="${id}">${esc(o.label)}</label><output for="${id}"></output><input id="${id}" type="range" min="${o.min}" max="${o.max}" step="${o.step || 'any'}" value="${o.value}">`;
+  parent.appendChild(w); const inp = w.querySelector('input'), out = w.querySelector('output'), fmt = o.fmt || (v => v);
+  const upd = () => { out.textContent = fmt(+inp.value); o.oninput && o.oninput(+inp.value); };
+  inp.addEventListener('input', upd); upd();
+  return { el: w, input: inp, get value() { return +inp.value; }, set(v) { inp.value = v; upd(); } };
+}
+function toggle(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent;
+  const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-pressed', o.value ? 'true' : 'false'); b.innerHTML = esc(o.label); parent.appendChild(b);
+  b.onclick = () => { const v = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', v); o.onchange && o.onchange(v); };
+  return b;
+}
+
+/* ---------- layout and number helpers */
+const grid = (j, o) => ({ x: (o.x0 || 0) + (j % o.cols) * (o.gap || 10), y: (o.y0 || 0) + Math.floor(j / o.cols) * (o.gapY || o.gap || 10) });
+function scale(d0, d1, r0, r1) { const s = v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0); s.invert = p => d0 + (p - r0) / (r1 - r0 || 1) * (d1 - d0); return s; }
+const fmt = {
+  int: v => Math.round(v).toLocaleString('en-US'),
+  pct: (v, d = 0) => (v * 100).toFixed(d) + '%',
+  usd: (v, d = 2) => (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(d),
+  sec: v => v < 60 ? v.toFixed(0) + ' s' : Math.floor(v / 60) + ' min ' + Math.round(v % 60) + ' s',
+};
+/* Wilson score interval for k successes in n trials (95% by default). Use it whenever a small sample is shown as a rate. */
+function wilson(k, n, z = 1.96) { if (!n) return [0, 1]; const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [Math.max(0, (c - m) / d), Math.min(1, (c + m) / d)]; }
+
+const K = { version: '1.0', NS, RM, C, STYLES, useStyle, rng, ease, clamp, lerp, f, esc, col, line, rect, ellipse, arrow, poly, curve, P, T, F, reveal, finish, mk, ICON, stepper, player, slider, toggle, grid, scale, fmt, wilson, sleep };
+window.K = K;
+})();
+</script>
+<script>
+/* ===== SCENE: same language, very different speed ===== */
+const {P, T, F, line, rect, ellipse, arrow, curve, poly, C} = K;
+
+/* DATA: copied from cases/same-language-gaps/data.json (notebook 39 README and data/results/derived/*.csv).
+   Seconds are medians of five runs on the benchmark input. Facts not in data.json come from facts.md and are
+   marked "facts.md". */
+const DATA = {
+  ledgerCpp: {'Claude Opus 5.5': 0.74, 'Claude Sonnet 5.5': 0.772, 'Claude Haiku 5.5': 0.968, 'GPT-6.1 Sol': 0.795,
+    'GPT-6.1 Terra': 11.4, 'Muse Wonder Full': 1.1, 'Muse Wonder': 1.09, 'DeepSeek V4.1 Flash': 0.98,
+    'GLM 5.3 Flash': 0.987, 'Nemotron 3.5 Super': 0.914},
+  logscanGo: {'Claude Opus 5.5': 0.367, 'Claude Sonnet 5.5': 0.465, 'Claude Haiku 5.5': 0.492, 'GPT-6.1 Sol': 0.46,
+    'GPT-6.1 Terra': 3.66, 'Muse Wonder Full': 0.497, 'Muse Wonder': 0.512, 'DeepSeek V4.1 Flash': 0.451,
+    'GLM 5.3 Flash': 0.504, 'Nemotron 3.5 Super': 0.572},
+  heatPlain: {'Claude Opus 5.5': 0.467, 'Claude Sonnet 5.5': 0.867, 'Claude Haiku 5.5': 1.05, 'GPT-6.1 Sol': 6.28,
+    'GPT-6.1 Terra': 6.82, 'Muse Wonder Full': 0.986, 'Muse Wonder': 0.875, 'DeepSeek V4.1 Flash': 0.853,
+    'GLM 5.3 Flash': 9.79, 'Nemotron 3.5 Super': 6.13},
+  walkersRust: {'Claude Opus 5.5': 0.122, 'Claude Sonnet 5.5': 0.118, 'Claude Haiku 5.5': 0.119, 'GPT-6.1 Sol': 0.105,
+    'GPT-6.1 Terra': 0.329, 'Muse Wonder Full': 0.0441, 'Muse Wonder': 0.376, 'DeepSeek V4.1 Flash': 0.349,
+    'GLM 5.3 Flash': 0.346, 'Nemotron 3.5 Super': 0.346},
+  ledgerNumpy: {'Claude Opus 5.5': 10.4, 'Claude Sonnet 5.5': 9.58, 'Claude Haiku 5.5': 24.4, 'GPT-6.1 Sol': 6.68,
+    'GPT-6.1 Terra': 7.71, 'Muse Wonder Full': 7.29, 'Muse Wonder': 8.25, 'DeepSeek V4.1 Flash': 7.86,
+    'GLM 5.3 Flash': 9.68, 'Nemotron 3.5 Super': 8.25},
+  ledgerPlain: {'Claude Opus 5.5': 7.08, 'Claude Sonnet 5.5': 7.22, 'Claude Haiku 5.5': 7.81, 'GPT-6.1 Sol': 6.51,
+    'GPT-6.1 Terra': 7.85, 'Muse Wonder Full': 9.39, 'Muse Wonder': 7.89, 'DeepSeek V4.1 Flash': 9.17,
+    'GLM 5.3 Flash': 7.79, 'Nemotron 3.5 Super': 10.7},
+  haikuLines: {numpy: 310, plain: 52},                         // data.json case 5 "slow"/"fast"
+  best13: {numpy: 6.7, plain: 6.5},                            // data.json case 5: fastest of all 13 authors
+  terraLedger: {'C++': 11.4, 'Go': 7.2, 'JavaScript': 10.1},   // facts.md
+  othersLedger: {'C++': [0.74, 1.10, 9], 'Go': [0.72, 1.97, 9], 'JavaScript': [1.19, 2.23, 7]},  // facts.md: [low, high, how many models]
+  jsExtra: {'Sol': 3.7, 'Nemotron': 8.4},                      // facts.md: JS exceptions to the 1.19-2.23 s range
+  programs: 832,                                               // facts.md: all 832 programs correct
+};
+const SHORT = {'Claude Opus 5.5': 'Opus', 'Claude Sonnet 5.5': 'Sonnet', 'Claude Haiku 5.5': 'Haiku', 'GPT-6.1 Sol': 'Sol',
+  'GPT-6.1 Terra': 'Terra', 'Muse Wonder Full': 'Wonder Full', 'Muse Wonder': 'Wonder', 'DeepSeek V4.1 Flash': 'DeepSeek',
+  'GLM 5.3 Flash': 'GLM', 'Nemotron 3.5 Super': 'Nemotron'};
+
+/* number formatting, used for every number on screen so text and bars agree */
+const sec = v => v >= 10 ? v.toFixed(1) : v >= 1 ? v.toFixed(2) : v >= 0.1 ? String(+v.toPrecision(3)) : String(+v.toPrecision(2));
+const times = v => { const r = v >= 10 ? Math.round(v) : Math.round(v * 10) / 10; return r + '×'; };
+const range = vs => `${sec(Math.min(...vs))} to ${sec(Math.max(...vs))} s`;
+
+/* layout shared by every guess step (same places in every step) */
+const L = {cardY: 54, cardH: 130, cardW: 172, cardX: [12, 196], verdictY: 206, row0: 228, rowH: 14.2, nameX: 84, letX: 92,
+  barX: 102, barW: 222, axisY: 368, resY: 408, res2Y: 427};
+
+/* ---------- one guess-then-reveal step per case ---------- */
+function guessStep(o) {
+  // o.rows: [{name, v, k}] where k is 'A', 'B' or '?' (approach not described)
+  const fastIdx = o.cards.findIndex(c => c.fast), F_ = o.cards[fastIdx], S_ = o.cards[1 - fastIdx];
+  const expl = o.expl;
+  const caps = {right: 'Right. ' + expl, wrong: 'Not quite. ' + expl, skip: `${F_.id} was faster. ` + expl};
+  const rows = o.rows.slice().sort((a, b) => a.v - b.v);
+  const xs = v => L.barX + L.barW * v / o.max;
+  const kindCol = k => k === F_.id ? 'fill.blue' : k === S_.id ? 'fill.red' : 'faint';
+  const cardSvg = (c, i) => {
+    const x = L.cardX[i], y = L.cardY, t0 = 250 + i * 450;
+    return P(rect(x, y, L.cardW, L.cardH, 11 + i), 'ink', t0, 650, 1.4) +
+      P(ellipse(x + 22, y + 22, 11, 11, 21 + i), 'ink', t0 + 300, 400, 1.3) +
+      T(x + 22, y + 28, c.id, {h: 1, z: 17, t: t0 + 400, w: 700}) +
+      T(x + 40, y + 28, c.head, {h: 1, z: 17, a: 'start', t: t0 + 400, w: 700}) +
+      c.lines.map((s, j) => T(x + 12, y + 50 + j * 16, s, {z: 13, a: 'start', t: t0 + 550 + j * 80})).join('') +
+      `<rect id="hit${c.id}" x="${x}" y="${y}" width="${L.cardW}" height="${L.cardH}" fill="transparent"/>`;
+  };
+  const ticks = () => o.ticks.map((v, j) => {
+    const x = xs(v), last = j === o.ticks.length - 1;
+    return P(line(x, L.axisY - 3, x, L.axisY + 3, 60 + j, 0), 'mut', 900, 150, 1.2) +
+      T(x, L.axisY + 15, (o.tickFmt ? o.tickFmt(v) : String(v)) + (last ? ' s' : ''), {z: 13, c: 'mut', t: 950});
+  }).join('');
+  const names = () => rows.map((r, j) => T(L.nameX, L.row0 + j * L.rowH + 4.5, SHORT[r.name], {z: 13, a: 'end', c: 'mut', t: 900 + j * 40, id: 'nm' + j})).join('');
+  return {
+    title: o.title, keys: o.keys || ['fast', 'slow', 'pick'], ask: true,
+    cap: o.cap,
+    caps,
+    draw: () =>
+      T(12, 22, o.task[0], {z: 14, a: 'start', c: 'mut'}) + T(12, 40, o.task[1], {z: 14, a: 'start', c: 'mut', t: 100}) +
+      o.cards.map(cardSvg).join('') +
+      T(190, L.verdictY, 'Which ran faster? Tap A or B.', {h: 1, z: 18, c: 'ink', t: 1300, id: 'verdict'}) +
+      P(line(L.barX, L.axisY, L.barX + L.barW, L.axisY, 59, .6), 'mut', 850, 500, 1.2) + ticks() + names(),
+    start(s) {
+      let done = false;
+      const skip = s.btn('right', 'Skip, just show me', () => go(null));
+      const go = pick => {
+        if (done) return; done = true; skip.remove();
+        if (pick) {
+          const i = o.cards.findIndex(c => c.id === pick), x = L.cardX[i];
+          const ring = s.el('path', {d: rect(x - 3, L.cardY - 3, L.cardW + 6, L.cardH + 6, 31 + i), fill: 'none', stroke: C.amber, 'stroke-width': 3, 'stroke-linecap': 'round'});
+          s.drawIn(ring, 450);
+          s.el('rect', {x: x + L.cardW - 82, y: L.cardY - 11, width: 72, height: 20, rx: 4, fill: C.bg});
+          s.write(x + L.cardW - 46, L.cardY + 5, 'your pick', {h: 1, z: 15, c: 'amber', w: 700});
+        }
+        const right = pick === F_.id;
+        s.swap('#verdict', pick ? (right ? `Right: ${F_.id} was faster` : `Not quite: ${F_.id} was faster`) : `${F_.id} was faster`, pick ? 'amber' : 'ink');
+        o.cards.forEach((c, i) => {
+          const vs = rows.filter(r => r.k === c.id).map(r => r.v);
+          const txt = (c.fast ? 'Faster: ' : 'Slower: ') + (c.tagV != null ? sec(c.tagV) + ' s' : vs.length > 1 ? range(vs) : sec(vs[0]) + ' s');
+          s.write(L.cardX[i] + 12, L.cardY + L.cardH - 10, txt, {z: 13, a: 'start', c: c.fast ? 'blue' : 'red', w: 700, t: 350});
+        });
+        s.at(500, () => (o.chart || barChart)(s, rows, xs, kindCol));
+        s.at(500 + 10 * 90 + 700, () => {
+          s.write(190, L.resY, o.result[0], {h: 1, z: 20, w: 700});
+          s.write(190, L.res2Y, o.result[1], {z: 13, c: 'mut', t: 150});
+        });
+        s.cap(pick ? (right ? caps.right : caps.wrong) : caps.skip);
+      };
+      o.cards.forEach(c => s.on('#hit' + c.id, () => go(c.id), `Pick ${c.id}: ${c.head}`));
+    },
+    demo: async s => { await s.wait(300); s.tap('#hit' + (o.demoPick || F_.id)); await s.wait(3000); },
+    demoDuration: 3600, duration: 2000,
+  };
+}
+
+function barChart(s, rows, xs, kindCol) {
+  rows.forEach((r, j) => {
+    const y = L.row0 + j * L.rowH, w = Math.max(1.5, xs(r.v) - L.barX);
+    s.write(L.letX, y + 4.5, r.k, {z: 13, c: r.k === '?' ? 'mut' : 'ink', t: j * 90, w: 700});
+    const b = s.el('rect', {x: L.barX, y: y - 4.5, width: f2(w), height: 9, rx: 1.5, fill: K.col(kindCol(r.k))});
+    b.style.transformBox = 'fill-box'; b.style.transformOrigin = '0 50%'; b.style.transform = 'scaleX(0)';
+    s.at(j * 90, () => s.bar(b, 1, 700));
+    s.write(L.barX + w + 4, y + 4.5, sec(r.v), {z: 13, a: 'start', m: 1, c: 'ink', t: j * 90 + 600});
+    s.q('#nm' + j) && (s.q('#nm' + j).setAttribute('fill', C.ink));
+  });
+}
+const f2 = v => Math.round(v * 100) / 100;
+
+/* rows helper: tag each model with the approach letter it used */
+const tag = (obj, fn) => Object.entries(obj).map(([name, v]) => ({name, v, k: fn(name, v)}));
+const lo = (vs) => Math.min(...vs), hi = vs => Math.max(...vs);
+const vals = (obj, names, keep = true) => Object.entries(obj).filter(([n]) => names.includes(n) === keep).map(([, v]) => v);
+
+/* --- case 1: ledger in C++ --- */
+const ledgerOthers = vals(DATA.ledgerCpp, ['GPT-6.1 Terra'], false);
+const ledgerStep = guessStep({
+  title: '2. A ledger in C++',
+  task: ['Task: read a ledger of 1 million lines,', 'each line one record in JSON (a text format).'],
+  cards: [
+    {id: 'A', head: 'Full JSON reader', lines: ['Turn every line into a', 'complete record with a', 'general JSON library,', 'then take the fields.']},
+    {id: 'B', head: 'Field scanner', fast: true, lines: ['Walk the raw text and', 'pull out only the', 'fields the task needs;', 'skip everything else.']},
+  ],
+  rows: tag(DATA.ledgerCpp, n => n === 'GPT-6.1 Terra' ? 'A' : 'B'),
+  max: 12, ticks: [0, 4, 8, 12],
+  cap: 'GPT-6.1 Terra and nine other models each wrote this program in C++. Two ways of reading the lines appeared. Tap the card you think ran faster.',
+  expl: `A full JSON reader builds a complete record for each of a million lines, even fields the task never uses. Terra's took ${sec(DATA.ledgerCpp['GPT-6.1 Terra'])} s; the nine scanners took ${range(ledgerOthers)}.`,
+  result: [`Same language, ${times(hi(Object.values(DATA.ledgerCpp)) / lo(Object.values(DATA.ledgerCpp)))} slower`,
+    `slowest ${sec(hi(Object.values(DATA.ledgerCpp)))} s ÷ fastest ${sec(lo(Object.values(DATA.ledgerCpp)))} s`],
+});
+
+/* --- case 2: log summary in Go --- */
+const logOthers = vals(DATA.logscanGo, ['GPT-6.1 Terra'], false);
+const logStep = guessStep({
+  title: '3. A log summary in Go',
+  task: ['Task: summarise a large log file whose', 'lines all follow one fixed layout.'],
+  cards: [
+    {id: 'A', head: 'Check by hand', fast: true, lines: ['Step through each line', 'character by character,', 'knowing where every', 'part must be.']},
+    {id: 'B', head: 'One long pattern', lines: ['Match every line', 'against one long', 'regular expression, a', 'general text matcher.']},
+  ],
+  rows: tag(DATA.logscanGo, n => n === 'GPT-6.1 Terra' ? 'B' : 'A'),
+  max: 4, ticks: [0, 1, 2, 3, 4], demoPick: 'B',
+  cap: 'Ten models wrote this program in Go. Nine took one approach and one model took the other. Tap the card you think ran faster.',
+  expl: `Terra sent every line through one long general-purpose pattern: ${sec(DATA.logscanGo['GPT-6.1 Terra'])} s. The nine hand-written checks, built for the fixed layout, took ${range(logOthers)}.`,
+  result: [`Same language, ${times(hi(Object.values(DATA.logscanGo)) / lo(Object.values(DATA.logscanGo)))} slower`,
+    `slowest ${sec(hi(Object.values(DATA.logscanGo)))} s ÷ fastest ${sec(lo(Object.values(DATA.logscanGo)))} s`],
+});
+
+/* --- case 3: heat in plain Python --- */
+const LOOPERS = ['GPT-6.1 Sol', 'GPT-6.1 Terra', 'GLM 5.3 Flash', 'Nemotron 3.5 Super'];
+const heatStep = guessStep({
+  title: '4. A heat grid in plain Python',
+  task: ['Task: update a grid of 160,000 cells 250 times,', 'in plain Python (no add-on libraries).'],
+  cards: [
+    {id: 'A', head: 'Cell by cell', lines: ['Visit each of the', '160,000 cells in a', 'Python loop, and', 'repeat 250 times.']},
+    {id: 'B', head: 'One giant number', fast: true, lines: ['Pack the whole grid', 'into one huge integer;', 'each arithmetic step', 'moves many cells.']},
+  ],
+  rows: tag(DATA.heatPlain, n => LOOPERS.includes(n) ? 'A' : 'B'),
+  max: 10, ticks: [0, 2, 4, 6, 8, 10],
+  cap: 'Ten models wrote this program in plain Python: six took one approach, four the other. Tap the card you think ran faster.',
+  expl: `Python is slow at many tiny steps, and four models visited 160,000 cells 250 times: ${range(vals(DATA.heatPlain, LOOPERS))}. Six packed the grid into one huge integer: ${range(vals(DATA.heatPlain, LOOPERS, false))}.`,
+  result: [`Same language, ${times(hi(Object.values(DATA.heatPlain)) / lo(Object.values(DATA.heatPlain)))} slower`,
+    `slowest ${sec(hi(Object.values(DATA.heatPlain)))} s ÷ fastest ${sec(lo(Object.values(DATA.heatPlain)))} s`],
+});
+
+/* --- case 4: walkers in Rust --- */
+const ONE_AT_A_TIME = ['Muse Wonder', 'GPT-6.1 Terra', 'DeepSeek V4.1 Flash', 'GLM 5.3 Flash', 'Nemotron 3.5 Super'];
+const walkStep = guessStep({
+  title: '5. Random walkers in Rust',
+  task: ['Task: move random walkers step by step;', 'each step picks one of four directions.'],
+  cards: [
+    {id: 'A', head: 'Four at once', fast: true, lines: ['Move four walkers in', 'each pass of the loop,', 'and pick directions', 'with no if/else.']},
+    {id: 'B', head: 'One at a time', lines: ['Move one walker per', 'pass and pick its', 'direction with a', 'four-way choice.']},
+  ],
+  rows: tag(DATA.walkersRust, n => n === 'Muse Wonder Full' ? 'A' : ONE_AT_A_TIME.includes(n) ? 'B' : '?'),
+  max: 0.4, ticks: [0, 0.1, 0.2, 0.3, 0.4], keys: ['fast', 'slow', 'other', 'pick'],
+  cap: 'Ten models wrote this program in Rust. Here every time is a fraction of a second, but the gap is still large. Tap the card you think ran faster.',
+  expl: `Muse Wonder Full moved four walkers per pass, no four-way choice: ${sec(DATA.walkersRust['Muse Wonder Full'])} s. Muse Wonder moved one at a time, with a choice the processor cannot predict: ${sec(DATA.walkersRust['Muse Wonder'])} s.`,
+  result: [`Same language, ${times(hi(Object.values(DATA.walkersRust)) / lo(Object.values(DATA.walkersRust)))} slower`,
+    `two changes at once; which did more is unknown`],
+});
+
+/* --- case 5: NumPy that made parsing slower --- */
+const NP_ORDER = Object.keys(DATA.ledgerNumpy);
+const npSlower = NP_ORDER.filter(n => DATA.ledgerNumpy[n] > DATA.ledgerPlain[n]).length;
+const numpyStep = guessStep({
+  title: '6. Adding NumPy to Python',
+  task: ['Same ledger task, now in Python.', 'One model, Claude Haiku 5.5, two versions.'],
+  cards: [
+    {id: 'A', head: 'Plain Python', fast: true, tagV: DATA.ledgerPlain['Claude Haiku 5.5'], lines: ['Read each line with', "Python's built-in", 'JSON reader.', `${DATA.haikuLines.plain} lines of code.`]},
+    {id: 'B', head: 'With NumPy', tagV: DATA.ledgerNumpy['Claude Haiku 5.5'], lines: ['Search the raw bytes', 'with whole-array', 'NumPy operations.', `${DATA.haikuLines.numpy} lines of code.`]},
+  ],
+  rows: NP_ORDER.map(n => ({name: n, v: DATA.ledgerNumpy[n], k: n === 'Claude Haiku 5.5' ? 'B' : '?', plain: DATA.ledgerPlain[n]})),
+  max: 25, ticks: [0, 5, 10, 15, 20, 25], keys: ['plain', 'numpy', 'pick'],
+  cap: 'NumPy is a Python library built for fast maths on large arrays of numbers. Haiku wrote the ledger with it and without it. Tap the version you think ran faster.',
+  expl: `NumPy is built for maths on numbers, and a ledger is text to read. Haiku's NumPy version took ${sec(DATA.ledgerNumpy['Claude Haiku 5.5'])} s; its plain version took ${sec(DATA.ledgerPlain['Claude Haiku 5.5'])} s. The chart shows all ten models.`,
+  result: [`NumPy slower for ${npSlower} of ${NP_ORDER.length} models`,
+    `fastest of all 13 authors: NumPy ${DATA.best13.numpy} s, plain ${DATA.best13.plain} s`],
+  chart(s, rows, xs) {
+    rows.forEach((r, j) => {
+      const y = L.row0 + j * L.rowH, xp = xs(r.plain), xn = xs(r.v), haiku = r.name === 'Claude Haiku 5.5';
+      const ln = s.el('line', {x1: f2(Math.min(xp, xn)), x2: f2(Math.max(xp, xn)), y1: y, y2: y, stroke: C.mut, 'stroke-width': 1.4});
+      s.fadeIn(ln, 400, j * 90);
+      const c = s.el('circle', {cx: f2(xp), cy: y, r: 4.6, fill: C.fill.green}); s.fadeIn(c, 400, j * 90);
+      const q = s.el('rect', {x: f2(xn - 4.2), y: y - 4.2, width: 8.4, height: 8.4, fill: C.fill.violet}); s.fadeIn(q, 400, j * 90 + 200);
+      if (haiku) {
+        s.write(xp - 8, y + 4.5, sec(r.plain), {z: 13, a: 'end', m: 1, t: j * 90 + 400});
+        s.write(xn - 8, y + 4.5, sec(r.v), {z: 13, a: 'end', m: 1, t: j * 90 + 500});
+      }
+      const nm = s.q('#nm' + j); if (nm) { nm.setAttribute('fill', C.ink); if (haiku) nm.setAttribute('font-weight', 700); }
+    });
+    s.write(L.barX + L.barW, L.row0 - 2, `<tspan fill="${C.fill.green}">●</tspan> plain   <tspan fill="${C.fill.violet}">■</tspan> NumPy`, {z: 13, a: 'end', c: 'mut', t: 300, raw: 1});
+  },
+});
+
+/* ---------- step 1: meet the setup ---------- */
+const introStep = {
+  title: '1. Correct, yet slow', keys: ['fast', 'slow'],
+  cap: `In each case ahead, ten AI coding models wrote the same program in the same language, all asked to make it as fast as they could. All ${DATA.programs} programs in the study gave correct output.`,
+  draw: () => {
+    let s = T(190, 30, 'Ten models, one task, one language', {h: 1, z: 20, w: 700});
+    for (let i = 0; i < 10; i++) {
+      const x = 16 + i * 35.4;
+      s += P(rect(x, 50, 28, 28, 100 + i), 'ink', 300 + i * 70, 350, 1.3) + T(x + 14, 70, '✓', {z: 16, c: 'ink', t: 650 + i * 70});
+    }
+    s += T(190, 104, 'every program gave the right output', {z: 14, t: 1400}) +
+      T(190, 122, 'on every hidden test input', {z: 14, t: 1500}) +
+      P(ellipse(42, 168, 18, 18, 140), 'ink', 1800, 500, 1.4) + P(line(42, 168, 42, 156, 141, 0), 'ink', 2200, 200, 1.6) +
+      P(line(42, 168, 51, 172, 142, 0), 'ink', 2300, 200, 1.6) + P(line(38, 146, 46, 146, 143, 0), 'ink', 2100, 150, 2) +
+      T(74, 164, 'Each was timed 5 times on one laptop;', {z: 14, a: 'start', t: 2000}) +
+      T(74, 182, 'the middle (median) time is its score.', {z: 14, a: 'start', t: 2100}) +
+      T(190, L.verdictY + 6, 'How each case will look', {h: 1, z: 18, t: 2600});
+    const demo = [['model 1', 0.9, 'B'], ['model 2', 1.1, 'B'], ['model 3', 9, 'A']];
+    demo.forEach(([n, v, k], j) => {
+      const y = L.row0 + 14 + j * 20, w = L.barW * v / 12;
+      s += T(L.nameX, y + 4.5, n, {z: 13, a: 'end', c: 'mut', t: 2900 + j * 150}) + T(L.letX, y + 4.5, k, {z: 13, t: 2900 + j * 150, w: 700}) +
+        F(`M${L.barX} ${y - 4.5}h${w}v9h${-w}z`, k === 'A' ? 'fill.red' : 'fill.blue', 3000 + j * 150, {op: 1});
+    });
+    s += T(L.barX, L.row0 + 88, 'illustrative numbers', {z: 13, a: 'start', c: 'mut', t: 3500}) +
+      T(190, 340, 'One bar per program. Shorter bar = faster.', {z: 14, t: 3700}) +
+      T(190, 358, 'The letter says which approach it used.', {z: 14, t: 3800}) +
+      T(190, 404, 'First, you guess which approach won.', {h: 1, z: 20, w: 700, t: 4200});
+    return s;
+  },
+  duration: 4700,
+};
+
+/* ---------- step 7: the slow choice travels with the model ---------- */
+const travelStep = (() => {
+  const langs = ['C++', 'Go', 'JavaScript'], x0 = 104, W = 240, mx = 12, X = v => x0 + W * v / mx, Y = [120, 200, 280];
+  const ratio = langs.map(l => DATA.terraLedger[l] / DATA.othersLedger[l][0]);
+  return {
+    title: '7. The gap follows the model', keys: ['slow'],
+    cap: "GPT-6.1 Terra's ledger was slow in Go and JavaScript too, not only in C++. Changing the language did not close the gap; the gap went with the model that wrote the code.",
+    draw: () => {
+      let s = T(12, 22, "GPT-6.1 Terra's ledger in three languages.", {z: 14, a: 'start', c: 'mut'}) +
+        T(12, 40, 'Grey bar: the range of the other models.', {z: 14, a: 'start', c: 'mut', t: 100});
+      langs.forEach((l, i) => {
+        const y = Y[i], [a, b, n] = DATA.othersLedger[l], t0 = 400 + i * 700, tv = DATA.terraLedger[l];
+        s += T(x0 - 10, y + 6, l, {h: 1, z: 18, a: 'end', t: t0, w: 700}) +
+          P(line(x0, y, x0 + W, y, 200 + i, .5), 'faint', t0, 500, 1) +
+          F(`M${X(a)} ${y - 7}h${X(b) - X(a)}v14h${X(a) - X(b)}z`, 'mut', t0 + 300, {op: .9}) +
+          T(x0, y + 24, `${n} others: ${a.toFixed(2)} to ${b.toFixed(2)} s`, {z: 13, a: 'start', c: 'mut', t: t0 + 350}) +
+          F(ellipse(X(tv), y, 6.5, 6.5, 210 + i), 'fill.red', t0 + 550, {op: 1}) +
+          (l === 'JavaScript' ? T(X(tv), y + 24, `Terra ${tv.toFixed(1)} s`, {z: 13, c: 'red', t: t0 + 600, w: 700})
+            : T(Math.min(X(tv) + 40, 366), y - 13, `Terra ${tv.toFixed(1)} s`, {z: 13, a: 'end', c: 'red', t: t0 + 600, w: 700}));
+        if (l === 'JavaScript') Object.entries(DATA.jsExtra).forEach(([m, v], j) => {
+          s += P(ellipse(X(v), y, 5, 5, 220 + j), 'ink', t0 + 450, 300, 1.4) + T(X(v), y - 13, `${m} ${v.toFixed(1)}`, {z: 13, c: 'mut', t: t0 + 500});
+        });
+      });
+      s += P(line(x0, 330, x0 + W, 330, 230, .5), 'mut', 2600, 400, 1.2) +
+        [0, 4, 8, 12].map((v, j) => T(X(v), 346, v + (j === 3 ? ' s' : ''), {z: 13, c: 'mut', t: 2700})).join('') +
+        T(190, 392, `Terra was ${times(Math.min(...ratio))} to ${times(Math.max(...ratio))} slower`, {h: 1, z: 20, w: 700, t: 3100}) +
+        T(190, 412, 'than the fastest other model, in every language', {z: 13, c: 'mut', t: 3250});
+      return s;
+    },
+    duration: 3600,
+  };
+})();
+
+/* ---------- step 8: what a team should check ---------- */
+const checkStep = {
+  title: '8. What to check', keys: [],
+  cap: 'None of these slow programs would fail a correctness test. The stopwatch and a second version to compare against are what catch them.',
+  draw: () => {
+    const items = [
+      ['Time it on a full-size input', `All ${DATA.programs} programs gave correct output;`, 'only timing showed these gaps.'],
+      ['Compare with a second version', `Terra's ${sec(DATA.ledgerCpp['GPT-6.1 Terra'])} s ledger looked fine alone;`, `next to ${sec(lo(Object.values(DATA.ledgerCpp)))} s, it did not.`],
+      ['Ask how it reads the input', 'A full JSON reader or one long pattern', 'is general; a fixed format can be scanned.'],
+      ['Look for item-by-item loops in Python', `${LOOPERS.length} of 10 heat programs looped over cells:`, `${range(vals(DATA.heatPlain, LOOPERS))}.`],
+      ['Measure before trusting a speed library', `NumPy made the ledger slower for ${npSlower} of 10 models;`, `Haiku's went from ${sec(DATA.ledgerPlain['Claude Haiku 5.5'])} s to ${sec(DATA.ledgerNumpy['Claude Haiku 5.5'])} s.`],
+    ];
+    let s = '';
+    items.forEach(([h, a, b], i) => {
+      const y = 30 + i * 64, t0 = 300 + i * 450;
+      s += P(rect(14, y - 14, 18, 18, 300 + i), 'ink', t0, 350, 1.4) + P(poly([[17, y - 6], [22, y], [31, y - 14]], 310 + i), 'blue', t0 + 300, 250, 2.2) +
+        T(44, y, h, {h: 1, z: 18, a: 'start', w: 700, t: t0 + 100}) +
+        T(44, y + 19, a, {z: 13, a: 'start', c: 'mut', t: t0 + 200}) + (b ? T(44, y + 35, b, {z: 13, a: 'start', c: 'mut', t: t0 + 250}) : '');
+    });
+    s += P(line(14, 362, 366, 362, 320, .4), 'faint', 2700, 400, 1) +
+      T(14, 382, 'Limits: one Windows laptop, median of 5 runs,', {z: 13, a: 'start', c: 'mut', t: 2900}) +
+      T(14, 399, 'one large input per task. In the walkers case two', {z: 13, a: 'start', c: 'mut', t: 2950}) +
+      T(14, 416, 'things changed at once; which did more is unknown.', {z: 13, a: 'start', c: 'mut', t: 3000});
+    return s;
+  },
+  duration: 3400,
+};
+
+const STEPS = [introStep, ledgerStep, logStep, heatStep, walkStep, numpyStep, travelStep, checkStep];
+const EXTRA = [].concat(...STEPS.filter(s => s.caps).map(s => Object.values(s.caps)));
+[...STEPS.map(s => s.cap), ...EXTRA].forEach(c => { if (c.length > 220) console.warn('caption over 220 chars (' + c.length + '): ' + c); });
+
+K.stepper({
+  root: '#x', style: 'chalkboard', viewBox: [380, 440],
+  title: 'Five cases where AI models wrote correct programs in the same language that ran up to 21 times slower than others, because of one approach the model chose.',
+  legend: [
+    {key: 'fast', label: 'Faster way', color: 'fill.blue'},
+    {key: 'slow', label: 'Slower way', color: 'fill.red'},
+    {key: 'other', label: 'Not described', color: 'mut'},
+    {key: 'plain', label: 'Plain Python', color: 'fill.green'},
+    {key: 'numpy', label: 'With NumPy', color: 'fill.violet'},
+    {key: 'pick', label: 'Your pick', color: 'amber'},
+  ],
+  extraCaptions: EXTRA,
+  steps: STEPS,
+});
+
+</script>
+</body></html>

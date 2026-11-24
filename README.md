@@ -4,6 +4,9 @@ Seven agent skills that teach a model to turn a finding, a process or a dataset 
 interactive explainer that a newcomer can follow on a phone: a step-by-step lesson, a replay of a real
 agent run, a what-if model to play with, a chart where every item is a dot, or a guess-then-reveal.
 
+**[See the example gallery](https://k-sandhu.github.io/visual-explainer-skills/)**: 25 explainers built with the
+skills from real experiment data, grouped by form, with one live example per form.
+
 ![A chalkboard lesson built with the skills: small coding agents remove their safety monitor, report it, then say it is still on when asked directly](examples/28-monitor-removal-honesty/explainer.gif)
 
 The skills are plain folders in the [Agent Skills](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview)
@@ -130,20 +133,20 @@ lines and text and uses stronger fills for data.
 
 ## Examples
 
-[`examples/`](examples/) holds eight explainers built with the skills from the experiments in
+[`examples/`](examples/) holds 25 explainers built with the skills, most from the experiments in
 [experiment-notebooks](https://github.com/k-sandhu/experiment-notebooks), each from the notebook's README and
-data, with no human edits. Download a folder and open `explainer.html` in a browser.
+data, with no human edits to the explainers. Browse them in the [gallery](https://k-sandhu.github.io/visual-explainer-skills/), or download a folder and open
+`explainer.html` in a browser. Some come from the skills' test rounds and were built with an earlier version
+of the kit.
 
-| Example | Form | Notebook |
+| Form | Skill | Examples |
 |---|---|---|
-| [Does an agent admit removing its monitor?](examples/28-monitor-removal-honesty/) | Lesson | 28 |
-| [When to stop repeating a task](examples/27-adaptive-knowledge-rollouts/) | Explorable | 27 |
-| [Scrapers that repair themselves](examples/31-self-repairing-scrapers/) | Replay | 31 |
-| [Which models make reliable judges](examples/33-judge-exam/) | Every item a dot | 33 |
-| [A classifier written as plain numbers](examples/41-direct-weight-mlps/) | Guess, then reveal | 41 |
-| [Who saw the change?](examples/29-theory-of-mind/) | Lesson with predictions | 29 |
-| [Do extra steps fix tax workpapers?](examples/12-tax-research-harnesses/) | Harness walkthrough | 12 |
-| [Reading paper lab orders](examples/08-lab-requisition-extraction/) | Every item a dot | 08 |
+| [Step-by-step lessons](https://k-sandhu.github.io/visual-explainer-skills/#lesson) | stepper-lesson | 7 |
+| [Replays of real runs](https://k-sandhu.github.io/visual-explainer-skills/#replay) | system-replay | 5 |
+| [Explorable models](https://k-sandhu.github.io/visual-explainer-skills/#explorable) | explorable-model | 3 |
+| [Every item is a dot](https://k-sandhu.github.io/visual-explainer-skills/#units) | unit-story | 4 |
+| [Guess, then reveal](https://k-sandhu.github.io/visual-explainer-skills/#guess) | predict-reveal | 4 |
+| [Standalone figures](https://k-sandhu.github.io/visual-explainer-skills/#figure) | explainer-kit (`--kind figure`) | 2 |
 
 ![An explorable built with the skills: move the share of tasks that always give the same result and see when stopping after two agreeing tries pays off](examples/27-adaptive-knowledge-rollouts/explainer.gif)
 

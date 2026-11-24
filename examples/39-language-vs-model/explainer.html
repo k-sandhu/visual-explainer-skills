@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Language or model</title>
+<style>:root{color-scheme:dark}html,body{margin:0;background:#141517}body{padding:16px;min-height:100vh;box-sizing:border-box}</style>
+</head><body>
+<div id="x"></div>
+<script>
+/* explainer-kit v1. A small engine for animated, stepwise SVG explainers. No dependencies.
+   Exposes window.K. Read explainer-kit/SKILL.md for the API and the rules it encodes.
+   Every animation is tied to a "generation": moving to another step cancels all timers,
+   loops and tweens of the old step, so steps can never bleed into each other. */
+(function () {
+'use strict';
+const NS = 'http://www.w3.org/2000/svg';
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const QS = new URLSearchParams(location.search);
+const REC = QS.has('record');
+const f = n => (+n).toFixed(1);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = { inOut: k => k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2, out: k => 1 - Math.pow(1 - k, 3), linear: k => k };
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+function rng(seed) { let a = seed >>> 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+/* ---------- styles: one object per look. ink colours draw lines and text; fill colours encode data
+   (fills were checked for colour-blind separation against their background). */
+const STYLES = {
+  chalkboard: { dark: 1, bg: '#1E2023', panel: '#17191B', ink: '#ECE7DA', mut: '#9A9A93', faint: '#55585E', line: '#4A4D53',
+    blue: '#9CC3E6', green: '#A8DDC3', amber: '#F2D98B', violet: '#C3B5E8', red: '#EBA494',
+    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    rough: 1, texture: 1, hand: "'Caveat', cursive", handSize: 1.12, font: 'https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap' },
+  paper: { dark: 0, bg: '#FBF8F1', panel: '#F3EEE3', ink: '#22252A', mut: '#5F6368', faint: '#C9C3B6', line: '#BDB6A8',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    rough: .7, texture: 0, hand: "'Kalam', cursive", handSize: 1, font: 'https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&display=swap' },
+  editorial: { dark: 0, bg: '#FFFFFF', panel: '#F5F5F2', ink: '#1A1A1A', mut: '#5C5C5C', faint: '#D6D6D0', line: '#C4C4BE',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#2F6DB5', amber: '#C27C12', green: '#1E7F55', violet: '#7B5EA7', red: '#C8553D' },
+    rough: 0, texture: 0, hand: "'Source Serif 4', Georgia, serif", handSize: .9, font: 'https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&display=swap' },
+  blueprint: { dark: 1, bg: '#10243A', panel: '#0C1C2E', ink: '#E6EEF5', mut: '#93A8BC', faint: '#3A5672', line: '#4A6A89',
+    blue: '#8EC5F0', green: '#9BE0C0', amber: '#F5D58A', violet: '#C9B8F2', red: '#F2A08F',
+    fill: { blue: '#4A8FDB', amber: '#BF8420', green: '#2FA876', violet: '#A070E8', red: '#E8604F' },
+    rough: 0, texture: 0, grid: 1, hand: "'IBM Plex Mono', ui-monospace, monospace", handSize: .78, font: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap' },
+};
+let ST = STYLES.chalkboard, ROUGH = 1;
+const C = {};                                   // active colours, e.g. K.C.ink, K.C.fill.blue
+function col(c) { if (!c) return C.ink; if (c[0] === '#' || c.startsWith('rgb') || c === 'none' || c === 'transparent') return c; if (c.startsWith('fill.')) return C.fill[c.slice(5)] || c; return C[c] || c; }
+function useStyle(name, root) {
+  ST = STYLES[name] || STYLES.chalkboard; ROUGH = ST.rough;
+  Object.keys(C).forEach(k => delete C[k]); Object.assign(C, ST, { fill: { ...ST.fill } });
+  injectCSS();
+  if (ST.font && !document.querySelector(`link[href="${ST.font}"]`)) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = ST.font; document.head.appendChild(l); }
+  if (root) {
+    const v = { bg: ST.bg, panel: ST.panel, ink: ST.ink, mut: ST.mut, faint: ST.faint, line: ST.line, blue: ST.blue, green: ST.green, amber: ST.amber, violet: ST.violet, red: ST.red, hand: ST.hand };
+    for (const k in v) root.style.setProperty('--k-' + k, v[k]);
+    root.classList.add('kx', 'kx-' + (name in STYLES ? name : 'chalkboard'));
+    if (ST.texture) { const r = rng(9); let s = ''; for (let i = 0; i < 140; i++) s += `<circle cx='${(r() * 240).toFixed(1)}' cy='${(r() * 240).toFixed(1)}' r='${(.4 + r() * .8).toFixed(2)}' fill='%23ffffff' fill-opacity='${(.02 + r() * .045).toFixed(3)}'/>`; root.style.backgroundImage = `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>${s}</svg>")`; }
+    if (ST.grid) root.style.backgroundImage = `linear-gradient(${ST.faint}55 1px,transparent 1px),linear-gradient(90deg,${ST.faint}55 1px,transparent 1px)`, root.style.backgroundSize = '20px 20px';
+  }
+  return ST;
+}
+function fontsReady(ms = 1500) { return Promise.race([document.fonts ? document.fonts.ready.then(() => document.fonts.load(`20px ${ST.hand.split(',')[0]}`)) : Promise.resolve(), new Promise(r => setTimeout(r, ms))]).catch(() => {}); }
+
+/* ---------- hand-drawn geometry. Each shape takes a seed so its wobble is identical on every frame. */
+const J = (r, a) => (r() - .5) * 2 * a * ROUGH;
+function line(x1, y1, x2, y2, seed = 1, bow = 1.6) { const r = rng(seed); return `M${f(x1 + J(r, .5))} ${f(y1 + J(r, .5))} Q${f((x1 + x2) / 2 + J(r, bow))} ${f((y1 + y2) / 2 + J(r, bow))} ${f(x2)} ${f(y2)}`; }
+function rect(x, y, w, h, seed = 1) {
+  if (!ROUGH) return `M${f(x)} ${f(y)}H${f(x + w)}V${f(y + h)}H${f(x)}Z`;
+  const r = rng(seed), p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(q => [q[0] + J(r, 1.3), q[1] + J(r, 1.3)]);
+  let d = `M${f(p[0][0])} ${f(p[0][1])}`;
+  for (let i = 0; i < 4; i++) { const A = p[i], B = p[(i + 1) % 4]; d += ` Q${f((A[0] + B[0]) / 2 + J(r, 1.5))} ${f((A[1] + B[1]) / 2 + J(r, 1.5))} ${f(B[0])} ${f(B[1])}`; }
+  return d + ` L${f(p[0][0] + (p[1][0] - p[0][0]) * .08)} ${f(p[0][1] + J(r, 1))}`;
+}
+function ellipse(cx, cy, rx, ry = rx, seed = 1) { const r = rng(seed); return `M${f(cx - rx)} ${f(cy)} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx + rx)} ${f(cy + J(r, .6))} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx - rx + 1.5 * ROUGH)} ${f(cy + .6 * ROUGH)}`; }
+function arrow(fx, fy, x, y, seed = 1, L = 8) { const a = Math.atan2(y - fy, x - fx), r = rng(seed), k = .5 + J(r, .06); return `M${f(x - L * Math.cos(a - k))} ${f(y - L * Math.sin(a - k))} L${f(x)} ${f(y)} L${f(x - L * Math.cos(a + k))} ${f(y - L * Math.sin(a + k))}`; }
+function poly(pts, seed = 1) { const r = rng(seed); return 'M' + pts.map((p, i) => `${f(p[0] + (i ? J(r, .6) : 0))} ${f(p[1] + (i ? J(r, .6) : 0))}`).join(' L'); }
+function curve(x1, y1, x2, y2, bend = .3) { const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1; return `M${f(x1)} ${f(y1)} Q${f(mx - dy * bend)} ${f(my + dx * bend)} ${f(x2)} ${f(y2)}`; }
+
+/* ---------- markup builders. Elements carry data-k (draw|fade), data-t (delay ms) and data-d (duration ms);
+   the engine reveals them in that order when a step opens, and shows them at once with reduced motion. */
+function P(d, c, t = 0, du = 600, w = 1.5, extra = '') { return `<path d="${d}" fill="none" stroke="${col(c)}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" data-k="draw" data-t="${t}" data-d="${du}" ${extra}/>`; }
+function T(x, y, s, o = {}) {
+  const fam = o.h ? 'var(--k-hand)' : o.m ? 'var(--font-mono, ui-monospace, Menlo, monospace)' : 'var(--font-sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif)';
+  const z = (o.z || 12) * (o.h ? ST.handSize : 1);
+  return `<text${o.id ? ` id="${o.id}"` : ''} x="${x}" y="${y}" text-anchor="${o.a || 'middle'}" font-size="${f(z)}"${o.w ? ` font-weight="${o.w}"` : ''} fill="${col(o.c)}" style="font-family:${fam};font-variant-numeric:tabular-nums" data-k="fade" data-t="${o.t || 0}" data-d="${o.d || 450}"${o.extra ? ' ' + o.extra : ''}>${o.raw ? s : esc(s)}</text>`;
+}
+function F(shape, c, t = 0, o = {}) { return `<path d="${shape}" fill="${col(c)}" fill-opacity="${o.op == null ? .85 : o.op}" stroke="none" data-k="fade" data-t="${t}" data-d="${o.d || 450}"${o.id ? ` id="${o.id}"` : ''}/>`; }
+function reveal(svg) {
+  const els = [...svg.querySelectorAll('[data-k]')];
+  if (RM) { els.forEach(e => { e.style.opacity = 1; e.style.strokeDashoffset = 0; }); return 0; }
+  let end = 0;
+  els.forEach(e => { e.style.transition = 'none'; const t = +e.dataset.t, d = +e.dataset.d; end = Math.max(end, t + d); if (e.dataset.k === 'draw') { const L = e.getTotalLength() + 1; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; } else e.style.opacity = 0; });
+  svg.getBoundingClientRect();
+  requestAnimationFrame(() => requestAnimationFrame(() => els.forEach(e => { const t = e.dataset.t, d = e.dataset.d; if (e.dataset.k === 'draw') { e.style.transition = `stroke-dashoffset ${d}ms cubic-bezier(.45,0,.55,1) ${t}ms`; e.style.strokeDashoffset = 0; } else { e.style.transition = `opacity ${d}ms ease ${t}ms`; e.style.opacity = 1; } })));
+  return end;
+}
+function finish(svg) { svg.querySelectorAll('[data-k]').forEach(e => { e.style.transition = 'none'; e.style.strokeDashoffset = 0; e.style.opacity = 1; }); }
+
+/* ---------- small DOM helpers */
+function mk(tag, attrs = {}, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+const ICON = {
+  left: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  right: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  play: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>',
+  replay: '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12l5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+let cssDone = false;
+function injectCSS() {
+  if (cssDone) return; cssDone = true;
+  const s = document.createElement('style');
+  s.textContent = `.kx{background-color:var(--k-bg);color:var(--k-ink);border-radius:16px;padding:14px 10px 12px;font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);max-width:560px;margin:0 auto;position:relative;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+.kx *{box-sizing:border-box}.kx svg.kx-stage{display:block;width:100%;height:auto;overflow:visible;transition:opacity .22s ease}
+.kx-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 6px;min-height:28px}
+.kx-title{font-family:var(--k-hand);font-size:23px;line-height:1.15}.kx-blueprint .kx-title,.kx-editorial .kx-title{font-size:19px}
+.kx-count{font-size:11px;color:var(--k-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.kx-cap{font-size:13.5px;line-height:1.55;margin:6px 8px 8px;color:var(--k-ink)}
+.kx-act{display:flex;justify-content:center;align-items:center;gap:8px;min-height:44px;flex-wrap:wrap;margin:0 4px 4px}
+.kx-legend{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px 12px;font-size:12px;color:var(--k-mut);margin:6px 8px 8px;min-height:40px}.kx-legend>span{transition:opacity .4s}
+.kx-sw{display:inline-block;width:12px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.kx-nav{display:flex;align-items:center;gap:8px}.kx button.kx-next{min-width:112px}.kx-act .kx-ctl{flex:1 1 100%}
+@media (max-width:480px){.kx{padding:12px 8px 10px}.kx button.kx-next{min-width:96px;padding:0 8px}.kx button.kx-dot{padding:10px 3px}.kx-nav{gap:6px}}
+.kx button{background:transparent;border:1px solid var(--k-line);color:var(--k-ink);border-radius:8px;padding:0 12px;font:inherit;font-size:13px;min-height:40px;min-width:40px;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}
+.kx button:hover{border-color:var(--k-mut)}.kx button:focus-visible,.kx [role=button]:focus-visible{outline:2px solid var(--k-violet);outline-offset:2px}
+.kx button.pri{border-color:var(--k-violet);color:var(--k-violet)}.kx button[aria-pressed=true]{background:color-mix(in srgb,var(--k-violet) 18%,transparent)}
+.kx-dots{display:flex;flex:1;justify-content:center;flex-wrap:nowrap;min-width:0}
+.kx button.kx-dot{padding:10px 5px;border:0;min-height:0;min-width:0;background:none}
+.kx-dot i{width:8px;height:8px;border-radius:50%;border:1px solid var(--k-mut);display:inline-block}.kx-dot[aria-current=step] i{background:var(--k-ink);border-color:var(--k-ink)}
+.kx-log{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:11px;line-height:17px;height:92px;overflow:hidden;background:var(--k-panel);border:1px solid var(--k-line);border-radius:8px;padding:6px 8px;margin:8px 4px 0;display:flex;flex-direction:column;justify-content:flex-end;white-space:pre-wrap}
+.kx-scrub{display:flex;align-items:center;gap:8px;margin:6px 4px}.kx-scrub input{flex:1}
+.kx-time{font-size:11px;color:var(--k-mut);min-width:64px;text-align:right;font-variant-numeric:tabular-nums}
+.kx input[type=range]{accent-color:var(--k-violet);height:32px;width:100%;margin:0}
+.kx-ctl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:12.5px;margin:4px 8px}.kx-ctl output{font-variant-numeric:tabular-nums;color:var(--k-ink);font-weight:600}.kx-ctl input{grid-column:1/3}
+.kx .pulse{animation:kxpl 1.2s ease-in-out 1 forwards}@keyframes kxpl{0%,100%{opacity:0}50%{opacity:.85}}
+.kx-ripple{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;border:2px solid var(--k-ink);pointer-events:none;animation:kxrp .6s ease-out forwards}@keyframes kxrp{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
+.kx-recording .kx-nav button:not(.kx-dot),.kx-recording .kx-scrub button{visibility:hidden}
+.kx .sr-only,.sr-only{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.kx *{transition:none!important;animation:none!important}}`;
+  document.head.appendChild(s);
+}
+
+/* ---------- step context: everything a step needs, bound to its generation */
+function makeCtx(eng, svg, i) {
+  const g = eng.gen, alive = () => g === eng.gen, dyn = svg.querySelector('.kx-dyn');
+  const q = s => svg.querySelector(s);
+  const pick = e => typeof e === 'string' ? q(e) : e;
+  const s = {
+    i, svg, dyn, q, alive, C, RM, root: eng.root, act: eng.act,
+    at(ms, fn) { const id = setTimeout(() => { if (alive()) fn(); }, ms); eng.timers.push(id); return id; },
+    wait(ms) { return new Promise(r => s.at(ms, () => { if (!(eng.inDemo && eng.touched)) r(); })); },   // an idle demo stops for good once the reader acts
+    loop(delay, fn) { s.at(delay, () => { let last = performance.now(); const t0 = last, st = {}; const k = n => { if (!alive()) return; st.dt = Math.min(.05, Math.max(0, (n - last) / 1000)); last = n; st.e = n - t0; if (fn(st) !== false) requestAnimationFrame(k); }; requestAnimationFrame(k); }); },
+    tween(du, fn, o = {}) { const ez = ease[o.ease || 'inOut']; return new Promise(res => s.at(o.delay || 0, () => { if (RM || du <= 0) { fn(1); res(); return; } const t0 = performance.now(); const k = n => { if (!alive()) return; const p = clamp((n - t0) / du); fn(ez(p)); if (p < 1) requestAnimationFrame(k); else res(); }; requestAnimationFrame(k); })); },
+    el(tag, attrs, parent) { return mk(tag, attrs, parent || dyn); },
+    drawIn(e, du = 500, delay = 0) { e = pick(e); if (!e || RM) return; const L = e.getTotalLength() + 1; e.style.transition = 'none'; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; e.getBoundingClientRect(); e.style.transition = `stroke-dashoffset ${du}ms cubic-bezier(.45,0,.55,1) ${delay}ms`; e.style.strokeDashoffset = 0; },
+    fadeIn(e, du = 400, delay = 0) { e = pick(e); if (!e) return; e.style.transition = 'none'; e.style.opacity = 0; e.getBoundingClientRect(); e.style.transition = `opacity ${du}ms ease ${delay}ms`; e.style.opacity = 1; },
+    fadeOut(e, du = 400, remove = true) { e = pick(e); if (!e) return; e.style.transition = `opacity ${du}ms`; e.style.opacity = 0; if (remove) setTimeout(() => e.remove(), du + 50); },
+    travel(path, du = 600, c = 'ink', o = {}) {   // a dot that moves along a path element or a list of points
+      let p = pick(path), temp = false;
+      if (Array.isArray(path)) { p = mk('path', { d: 'M' + path.map(q => q.join(' ')).join(' L'), fill: 'none', stroke: col(c), 'stroke-width': 1.6, 'stroke-opacity': o.trail === false ? 0 : .5, 'stroke-linecap': 'round' }, dyn); temp = true; if (o.trail !== false) s.drawIn(p, du); }
+      const d = mk('circle', { r: o.r || 3.6, fill: col(c) }, dyn), L = p.getTotalLength();
+      const done = () => { s.fadeOut(d, 300); if (temp && !o.keep) setTimeout(() => s.fadeOut(p, 450), 200); };
+      if (RM) { const e = p.getPointAtLength(L); d.setAttribute('cx', e.x); d.setAttribute('cy', e.y); done(); return Promise.resolve(); }
+      return s.tween(du, k => { const e = p.getPointAtLength(k * L); d.setAttribute('cx', f(e.x)); d.setAttribute('cy', f(e.y)); }, { delay: o.delay || 0 }).then(done);
+    },
+    ring(x, y, w, h, c = 'ink', o = {}) { const p = mk('path', { d: rect(x, y, w, h, Math.round(x * 7 + y)), fill: 'none', stroke: col(c), 'stroke-width': o.w || 2.4, 'stroke-linecap': 'round', class: 'pulse' }, dyn); p.style.opacity = 0; setTimeout(() => p.remove(), 1400); return p; },
+    write(x, y, text, o = {}) { const w = document.createElementNS(NS, 'g'); w.innerHTML = T(x, y, text, o); const t = w.firstChild; dyn.appendChild(t); t.removeAttribute('data-k'); s.fadeIn(t, o.d || 450, o.t || 0); return t; },
+    float(x, y, text, c = 'ink', z = 16) { const t = s.write(x, y, text, { h: 1, z, c }); if (!RM) { t.style.transition = 'transform 1.1s ease-out, opacity 1.1s ease-out'; requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transform = 'translateY(-18px)'; t.style.opacity = 0; })); } setTimeout(() => t.remove(), 1200); },
+    swap(e, text, c) { e = pick(e); if (!e) return; e.style.transition = 'opacity .15s'; e.style.opacity = 0; s.at(160, () => { e.textContent = text; if (c) e.setAttribute('fill', col(c)); e.style.opacity = 1; }); },
+    count(e, to, o = {}) { e = pick(e); if (!e) return; const from = o.from != null ? o.from : (+e.dataset.v || 0), fmt = o.fmt || (v => Math.round(v).toLocaleString()); e.dataset.v = to; return s.tween(o.du || 900, k => { e.textContent = (o.pre || '') + fmt(lerp(from, to, k)) + (o.post || ''); }, { delay: o.delay || 0 }); },
+    bar(e, frac, du = 600, axis = 'x') { e = pick(e); if (!e) return; e.style.transformBox = 'fill-box'; e.style.transformOrigin = axis === 'x' ? '0 50%' : '50% 100%'; e.style.transition = RM ? 'none' : `transform ${du}ms cubic-bezier(.45,0,.55,1)`; e.style.transform = axis === 'x' ? `scaleX(${clamp(frac).toFixed(4)})` : `scaleY(${clamp(frac).toFixed(4)})`; },
+    btn(icon, label, fn, o = {}) { const b = document.createElement('button'); if (o.primary) b.className = 'pri'; b.innerHTML = (ICON[icon] || '') + esc(label); b.type = 'button'; b.onclick = e => { if (e.isTrusted) s.touched(); fn(b); }; eng.act.appendChild(b); return b; },
+    on(e, fn, label) { e = pick(e); e.setAttribute('role', 'button'); e.setAttribute('tabindex', '0'); if (label) e.setAttribute('aria-label', label); e.style.cursor = 'pointer'; const h = ev => { if (ev.isTrusted) s.touched(); fn(ev); }; e.addEventListener('click', h); e.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); h(ev); } }); return e; },
+    point(ev) { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const m = svg.getScreenCTM(); return m ? pt.matrixTransform(m.inverse()) : { x: 0, y: 0 }; },
+    drag(e, o) { e = pick(e); e.style.touchAction = 'none'; e.style.cursor = 'grab'; let on = false; e.addEventListener('pointerdown', ev => { on = true; e.setPointerCapture(ev.pointerId); s.touched(); o.move && o.move(s.point(ev), ev); }); e.addEventListener('pointermove', ev => { if (on && alive()) o.move && o.move(s.point(ev), ev); }); const up = ev => { if (!on) return; on = false; o.end && o.end(s.point(ev), ev); }; e.addEventListener('pointerup', up); e.addEventListener('pointercancel', up); return e; },
+    cap(text) { eng.cap.textContent = text; },
+    touched() { eng.touched = true; if (eng.stopAuto && !REC) eng.stopAuto(); },   // a reader who acts takes over from autoplay
+    tap(e) { e = pick(e); if (!e || !alive() || (eng.inDemo && eng.touched)) return; const r = e.getBoundingClientRect(), R = eng.root.getBoundingClientRect(), d = document.createElement('div'); d.className = 'kx-ripple'; d.style.left = (r.left + r.width / 2 - R.left) + 'px'; d.style.top = (r.top + r.height / 2 - R.top) + 'px'; eng.root.appendChild(d); setTimeout(() => d.remove(), 650); e.dispatchEvent(new MouseEvent('click', { bubbles: true })); },
+    /* unit charts: one circle per item, keyed, so items keep their identity when they move */
+    units(items, o = {}) { const gU = mk('g', { class: 'kx-units' }, o.parent || dyn); s._units = items.map((it, j) => { const c = mk('circle', { cx: o.x0 || 0, cy: o.y0 || 0, r: o.r || 4, fill: col(o.fill || 'fill.blue') }, gU); c.style.transition = 'fill .5s, opacity .5s'; return { it, c, x: o.x0 || 0, y: o.y0 || 0, r: o.r || 4, j }; }); return s._units; },
+    arrange(layout, o = {}) { const U = s._units || [], du = o.du || 900, stg = o.stagger == null ? 4 : o.stagger, ez = ease[o.ease || 'inOut'];
+      const tg = U.map((u, j) => { const L = layout(u.it, j) || {}; if (L.fill) u.c.style.fill = col(L.fill); if (L.opacity != null) u.c.style.opacity = L.opacity; return { x0: u.x, y0: u.y, r0: u.r, x: L.x == null ? u.x : L.x, y: L.y == null ? u.y : L.y, r: L.r == null ? u.r : L.r, dl: (L.order == null ? j : L.order) * stg }; });
+      const tot = du + Math.max(0, ...tg.map(t => t.dl));
+      return s.tween(tot, k => { const ms = k * tot; U.forEach((u, j) => { const t = tg[j], p = ez(clamp((ms - t.dl) / du)); u.x = lerp(t.x0, t.x, p); u.y = lerp(t.y0, t.y, p); u.r = lerp(t.r0, t.r, p); u.c.setAttribute('cx', f(u.x)); u.c.setAttribute('cy', f(u.y)); u.c.setAttribute('r', f(u.r)); }); }, { ease: 'linear', delay: o.delay || 0 }); },
+  };
+  return s;
+}
+
+/* ---------- stepper: a lesson that moves one idea at a time, with fixed controls */
+const ALL = (window.EXPLAINERS = window.EXPLAINERS || []);
+function frame(root, o, kind) {
+  root = typeof root === 'string' ? document.querySelector(root) : root;
+  useStyle(o.style || 'chalkboard', root);
+  const [W, H] = o.viewBox || [380, 300];
+  const legend = (o.legend || []).map(l => `<span data-l="${l.key}"><span class="kx-sw" style="background:${col(l.color)}"></span>${esc(l.label)}</span>`).join('');
+  root.innerHTML = `<h2 class="sr-only">${esc(o.title || '')}</h2><div class="kx-head"><span class="kx-title"></span><span class="kx-count"></span></div>
+<svg class="kx-stage" viewBox="0 0 ${W} ${H}" role="img"></svg><p class="kx-cap" aria-live="polite"></p>${kind === 'player' && o.log ? '<div class="kx-log" aria-hidden="true"></div>' : ''}
+${kind === 'player' ? '<div class="kx-scrub"><button class="kx-pp" type="button"></button><input type="range" min="0" step="1" aria-label="Scrub the timeline"><span class="kx-time"></span></div>' : '<div class="kx-act"></div>'}
+${legend ? `<div class="kx-legend">${legend}</div>` : ''}<div class="kx-nav"><button class="kx-back" type="button" aria-label="Previous">${ICON.left}</button><div class="kx-dots"></div>${kind === 'stepper' ? `<button class="kx-replay" type="button" aria-label="Replay this step" title="Replay this step">${ICON.replay}</button>` : ''}<button class="kx-next" type="button"></button></div>`;
+  if (REC) root.classList.add('kx-recording');
+  const $ = s => root.querySelector(s);
+  return { root, W, H, svg: $('.kx-stage'), cap: $('.kx-cap'), act: $('.kx-act'), title: $('.kx-title'), count: $('.kx-count'), dots: $('.kx-dots'), next: $('.kx-next'), back: $('.kx-back'), replay: $('.kx-replay'), log: $('.kx-log'), $ };
+}
+function fixCaptionHeight(fr, texts) {   // reserve the tallest caption so nothing below it ever moves
+  const m = fr.cap.cloneNode(); m.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;min-height:0;width:${fr.cap.clientWidth}px`; m.removeAttribute('aria-live'); fr.cap.parentNode.appendChild(m);
+  let h = 0; texts.forEach(t => { m.textContent = t; h = Math.max(h, m.offsetHeight); }); m.remove(); fr.cap.style.minHeight = h + 'px';
+}
+function stepper(o) {
+  const fr = frame(o.root, o, 'stepper'), S = o.steps;
+  if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
+  const eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
+  let cur = 0, first = true, auto = null, ends = [];
+  eng.stopAuto = () => { auto = null; };
+  S.forEach((st, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to step ' + (i + 1)); b.innerHTML = '<i></i>'; b.onclick = () => go(i); fr.dots.appendChild(b); });
+  const capTexts = S.map(st => st.cap || '').concat(o.extraCaptions || []);
+  fixCaptionHeight(fr, capTexts); addEventListener('resize', () => fixCaptionHeight(fr, capTexts));
+  function build(i) {
+    cur = i; eng.touched = false; const st = S[i], s = {};
+    fr.svg.innerHTML = (typeof st.draw === 'function' ? st.draw(K) : st.draw || '') + '<g class="kx-dyn"></g>';
+    fr.act.innerHTML = ''; fr.title.textContent = st.title || ''; fr.count.textContent = `Step ${i + 1} of ${S.length}`;
+    fr.svg.setAttribute('aria-label', (st.title || '') + '. ' + (st.alt || st.cap || ''));
+    [...fr.dots.children].forEach((d, j) => j === i ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'));
+    fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !st.keys || st.keys.includes(e.dataset.l) ? '' : 'none');   // only this step's colours
+    fr.next.innerHTML = i === S.length - 1 ? ICON.restart + 'Start over' : 'Next' + ICON.right;
+    fr.cap.style.transition = 'none'; fr.cap.style.opacity = 0; fr.cap.textContent = st.cap || '';
+    const revealEnd = reveal(fr.svg);
+    const ctx = makeCtx(eng, fr.svg, i);
+    ctx.at(st.capDelay == null ? 300 : st.capDelay, () => { fr.cap.style.transition = 'opacity .6s'; fr.cap.style.opacity = 1; });
+    if (st.start) st.start(ctx);
+    eng.inDemo = false;
+    if (st.demo && st.idleDemo && !REC && !st.ask) ctx.at(st.idleDemo, () => { if (!eng.touched) { eng.inDemo = true; Promise.resolve(st.demo(ctx)).finally(() => { eng.inDemo = false; }); } });
+    ends[i] = st.duration || revealEnd + 600;
+    eng.ctx = ctx;
+  }
+  function go(i, keepAuto) {
+    if (!keepAuto) auto = null;
+    eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = [];
+    i = Math.max(0, Math.min(S.length - 1, i));
+    const g = eng.gen;
+    if (first || RM) { first = false; build(i); fr.svg.style.opacity = 1; }
+    else { fr.svg.style.opacity = 0; setTimeout(() => { if (g === eng.gen) { build(i); fr.svg.style.opacity = 1; } }, 230); }
+  }
+  fr.back.onclick = () => go(cur - 1);
+  fr.next.onclick = () => go(cur < S.length - 1 ? cur + 1 : 0);
+  fr.replay.onclick = () => go(cur);
+  document.addEventListener('keydown', e => { if (e.target.closest && e.target.closest('[role=button],input,button,textarea,select')) return; if (ALL.length > 1 && !fr.root.contains(document.activeElement)) return; if (e.key === 'ArrowRight') go(cur + 1); if (e.key === 'ArrowLeft') go(cur - 1); });
+  const api = {
+    kind: 'stepper', root: fr.root, get count() { return S.length; }, get current() { return cur; },
+    go: i => go(i), duration: i => S[i].duration || ends[i] || 4000, hasDemo: i => !!S[i].demo,
+    demo: i => { const c = eng.ctx; return c && c.i === i && S[i].demo ? Promise.resolve(S[i].demo(c)) : Promise.resolve(); },
+    demoDuration: i => S[i].demoDuration || 0,
+    async autoplay(hold = o.hold || 2200) { const me = auto = {}; for (let i = 0; i < S.length; i++) { if (auto !== me) return; go(i, true); await sleep(260 + api.duration(i)); if (auto !== me) return; if (S[i].demo) { await Promise.race([api.demo(i), sleep(S[i].demoDuration || 12000)]); await sleep(S[i].demoDuration ? 0 : 600); } await sleep(hold); } },
+  };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { go(+(QS.get('step') || 1) - 1); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; });
+    else if (o.autoplay && !RM && !QS.has('step') && !QS.has('static')) { const run = () => api.autoplay().then(() => { if (o.autoplay === 'loop' && auto) run(); }); run(); } });
+  return api;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- player: a scrubbable timeline. frame(t, s) must draw the scene for time t from scratch,
+   so pause, scrub, replay and recording all work for free. Chapters label stretches of the timeline. */
+function player(o) {
+  const fr = frame(o.root, o, 'player'), eng = { gen: 0, timers: [], root: fr.root, act: null, cap: fr.cap, touched: false };
+  const CH = o.chapters || [{ at: 0, title: o.title || '', cap: '' }], D = o.duration;
+  const range = fr.$('.kx-scrub input'), pp = fr.$('.kx-pp'), tm = fr.$('.kx-time');
+  range.max = D; let t = 0, playing = false, last = 0, chap = -1, speed = o.speed || 1;
+  fr.svg.innerHTML = (typeof o.scene === 'function' ? o.scene(K) : o.scene || '') + '<g class="kx-dyn"></g>';
+  const ctx = makeCtx(eng, fr.svg, 0); reveal(fr.svg);
+  CH.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to ' + (c.title || 'part ' + (i + 1))); b.innerHTML = '<i></i>'; b.onclick = () => { seek(c.at); play(); }; fr.dots.appendChild(b); });
+  fixCaptionHeight(fr, CH.map(c => c.cap || ''));
+  const chapterAt = x => { let k = 0; CH.forEach((c, i) => { if (x >= c.at) k = i; }); return k; };
+  function setChapter(k) { if (k === chap) return; chap = k; const c = CH[k]; fr.title.textContent = c.title || ''; fr.count.textContent = `Part ${k + 1} of ${CH.length}`; fr.cap.textContent = c.cap || ''; fr.svg.setAttribute('aria-label', (c.title || '') + '. ' + (c.alt || c.cap || '')); [...fr.dots.children].forEach((d, j) => j === k ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current')); fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !c.keys || c.keys.includes(e.dataset.l) ? '' : 'none'); }
+  function logTo(x) { if (!fr.log || !o.log) return; const L = o.log.filter(e => e.t <= x).slice(-6), key = L.map(e => e.t + e.text).join('|'); if (key === fr.log.dataset.k) return; fr.log.dataset.k = key; fr.log.innerHTML = L.map(e => `<div style="color:${col(e.c || 'mut')}">${esc(e.text)}</div>`).join(''); }
+  function draw() { range.value = t; tm.textContent = o.clock ? o.clock(t) : (t / 1000).toFixed(1) + ' s'; setChapter(chapterAt(t)); logTo(t); o.frame(t, ctx); }
+  function seek(x) { t = clamp(x, 0, D); draw(); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n; t += dt * speed; if (t >= D) { t = D; playing = false; updPP(); } draw(); if (playing) requestAnimationFrame(tick); }
+  function play() { if (t >= D) t = 0; if (RM) { seek(end(chapterAt(t)) - 1); return; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }  // reduced motion: jump to the end state of the chapter instead of animating
+  function pause() { playing = false; updPP(); }
+  function updPP() { pp.innerHTML = playing ? ICON.pause + 'Pause' : t >= D ? ICON.replay + 'Replay' : ICON.play + 'Play'; pp.setAttribute('aria-label', playing ? 'Pause' : 'Play'); }
+  pp.onclick = () => playing ? pause() : play();
+  range.oninput = () => { pause(); seek(+range.value); };
+  fr.back.onclick = () => { seek(CH[Math.max(0, chapterAt(t) - (t - CH[chapterAt(t)].at < 600 ? 1 : 0))].at); };
+  fr.next.innerHTML = 'Next' + ICON.right; fr.next.onclick = () => { const k = chapterAt(t); seek(k < CH.length - 1 ? CH[k + 1].at : 0); play(); };
+  const end = i => i < CH.length - 1 ? CH[i + 1].at : D;
+  const api = { kind: 'player', root: fr.root, get count() { return CH.length; }, get current() { return chapterAt(t); }, go: i => { seek(CH[i].at); play(); }, duration: i => (end(i) - CH[i].at) / speed, hasDemo: () => false, demo: () => Promise.resolve(), seek, play, pause, get time() { return t; },
+    async autoplay() { seek(0); play(); while (t < D) await sleep(200); await sleep(o.hold || 2000); } };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { const k = +(QS.get('step') || 1) - 1; seek(CH[Math.min(k, CH.length - 1)].at); updPP(); if (o.autoplay !== false && !QS.has('static')) play(); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  return api;
+}
+
+/* ---------- controls for explorables */
+let uid = 0;
+function slider(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent; const id = 'kx' + (++uid);
+  const w = document.createElement('div'); w.className = 'kx-ctl';
+  w.innerHTML = `<label for="${id}">${esc(o.label)}</label><output for="${id}"></output><input id="${id}" type="range" min="${o.min}" max="${o.max}" step="${o.step || 'any'}" value="${o.value}">`;
+  parent.appendChild(w); const inp = w.querySelector('input'), out = w.querySelector('output'), fmt = o.fmt || (v => v);
+  const upd = () => { out.textContent = fmt(+inp.value); o.oninput && o.oninput(+inp.value); };
+  inp.addEventListener('input', upd); upd();
+  return { el: w, input: inp, get value() { return +inp.value; }, set(v) { inp.value = v; upd(); } };
+}
+function toggle(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent;
+  const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-pressed', o.value ? 'true' : 'false'); b.innerHTML = esc(o.label); parent.appendChild(b);
+  b.onclick = () => { const v = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', v); o.onchange && o.onchange(v); };
+  return b;
+}
+
+/* ---------- layout and number helpers */
+const grid = (j, o) => ({ x: (o.x0 || 0) + (j % o.cols) * (o.gap || 10), y: (o.y0 || 0) + Math.floor(j / o.cols) * (o.gapY || o.gap || 10) });
+function scale(d0, d1, r0, r1) { const s = v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0); s.invert = p => d0 + (p - r0) / (r1 - r0 || 1) * (d1 - d0); return s; }
+const fmt = {
+  int: v => Math.round(v).toLocaleString('en-US'),
+  pct: (v, d = 0) => (v * 100).toFixed(d) + '%',
+  usd: (v, d = 2) => (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(d),
+  sec: v => v < 60 ? v.toFixed(0) + ' s' : Math.floor(v / 60) + ' min ' + Math.round(v % 60) + ' s',
+};
+/* Wilson score interval for k successes in n trials (95% by default). Use it whenever a small sample is shown as a rate. */
+function wilson(k, n, z = 1.96) { if (!n) return [0, 1]; const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [Math.max(0, (c - m) / d), Math.min(1, (c + m) / d)]; }
+
+const K = { version: '1.0', NS, RM, C, STYLES, useStyle, rng, ease, clamp, lerp, f, esc, col, line, rect, ellipse, arrow, poly, curve, P, T, F, reveal, finish, mk, ICON, stepper, player, slider, toggle, grid, scale, fmt, wilson, sleep };
+window.K = K;
+})();
+</script>
+<script>
+/* ===== SCENE: language or model? ===== */
+const {P, T, F, line, rect, C} = K;
+
+/* DATA, copied from cases/language-vs-model/data.json (notebook 39, origin/main, data/results/derived/*.csv)
+   and cases/language-ladder/data.json (per_task_seconds). Shares are of within-task variation in LOG run time,
+   over the 60 programs of a task (10 session models x 6 non-Python languages). */
+const DATA = {
+  models: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'Claude Haiku 5.5', 'GPT-6.1 Sol', 'GPT-6.1 Terra',
+           'Muse Wonder Full', 'Muse Wonder', 'DeepSeek V4.1 Flash', 'GLM 5.3 Flash', 'Nemotron 3.5 Super'],
+  short:  ['Claude Opus', 'Claude Sonnet', 'Claude Haiku', 'GPT Sol', 'GPT Terra',
+           'Wonder Full', 'Wonder', 'DeepSeek', 'GLM', 'Nemotron'],
+  // examples: seconds by model (median of 5 timed runs), same model order as above
+  springs: { cpp: [0.0783, 0.0899, 0.122, 0.133, 0.126, 0.0996, 0.117, 0.117, 0.104, 0.156],
+             java: [0.267, 0.308, 0.331, 0.369, 0.322, 0.257, 0.262, 0.244, 0.309, 0.466] },
+  ledger:  { cpp: [0.74, 0.772, 0.968, 0.848, 11.4, 1.1, 1.09, 0.98, 0.987, 0.914],
+             java: [1.2, 1.0, 1.26, 1.73, 4.08, 1.49, 1.5, 1.36, 1.52, 2.97] },
+  // per_task: [task, kind, language_share, model_share, rest_share], sorted by language share
+  perTask: [
+    ['springs', 'a floating-point loop', .847, .0641, .0887],
+    ['heat', 'grid arithmetic', .745, .112, .143],
+    ['align', 'a dynamic-programming table', .607, .22, .173],
+    ['walkers', 'a parallel simulation', .607, .291, .102],
+    ['routes', 'graph search', .328, .576, .0955],
+    ['logscan', 'parsing text with a pattern', .297, .5949, .108],  // data.json 0.595 is a 3-digit rounding; facts.md and the notebook report 59%, so the unrounded value is below 0.595
+    ['ledger', 'parsing JSON records', .202, .563, .235],
+    ['wordpairs', 'text and hash tables', .119, .699, .181],
+  ],
+  pooled: [.47, .387, .143],
+  withPython: .86,
+  // language-ladder per_task_seconds: fastest and slowest model per language
+  ledgerJsFastest: 1.19, wordpairsCpp: [0.436, 4.28], wordpairsJsFastest: 0.873,
+};
+
+/* Variance split for the 20 example programs (2 languages x 10 models), on log time, computed here. */
+function split(task) {
+  const d = DATA[task], y = [...d.cpp, ...d.java].map(Math.log), n = 20;
+  const g = y.reduce((a, b) => a + b) / n, sst = y.reduce((a, v) => a + (v - g) ** 2, 0);
+  const mC = d.cpp.map(Math.log).reduce((a, b) => a + b) / 10, mJ = d.java.map(Math.log).reduce((a, b) => a + b) / 10;
+  const ssl = 10 * ((mC - g) ** 2 + (mJ - g) ** 2);
+  const ssm = d.cpp.reduce((a, v, i) => a + 2 * ((Math.log(v) + Math.log(d.java[i])) / 2 - g) ** 2, 0);
+  return { lang: ssl / sst, model: ssm / sst, rest: 1 - (ssl + ssm) / sst };
+}
+const SPLIT = { springs: split('springs'), ledger: split('ledger') };
+const pc = v => Math.round(v * 100) + '%';
+console.log('20-program split', JSON.stringify(SPLIT));
+
+/* Shared plot geometry for steps 2-4 and 6: log time axis, 0.06 s to 15 s */
+const LX0 = Math.log10(0.06), LX1 = Math.log10(15), PX0 = 104, PX1 = 360;
+const X = t => PX0 + (Math.log10(t) - LX0) / (LX1 - LX0) * (PX1 - PX0);
+const AXY = 312;
+function axis(t0 = 0) {
+  let m = P(line(PX0, AXY, PX1, AXY, 11, .6), 'mut', t0, 500, 1.3);
+  [0.1, 1, 10].forEach((v, i) => {
+    m += `<line x1="${X(v)}" x2="${X(v)}" y1="64" y2="${AXY}" stroke="${C.faint}" stroke-width="1" stroke-dasharray="2 4"/>`;
+    m += T(X(v), AXY + 18, (v < 1 ? v : v.toFixed(0)) + ' s', {z: 13, c: 'mut', t: t0 + 200 + i * 80});
+  });
+  m += T(PX1, AXY + 38, 'run time; each grid line is 10× the last', {z: 13, c: 'mut', a: 'end', t: t0 + 500});
+  return m;
+}
+/* meter: how much of the variation is left once dots are compared with their own group's average */
+function meter(task) {
+  return T(16, 30, task + ': 20 programs', {h: 1, z: 20, a: 'start', c: 'ink'}) +
+    T(16, 52, 'Variation left: 100%', {z: 14, a: 'start', id: 'mtxt'}) +
+    `<rect x="200" y="40" width="160" height="14" rx="2" fill="${C.faint}" fill-opacity=".9"/>` +
+    `<rect id="mbar" x="200" y="40" width="160" height="14" rx="2" fill="${C.fill.blue}" style="transform-box:fill-box;transform-origin:0 50%;transform:scaleX(0)"/>` +
+    P(rect(200, 40, 160, 14, 5), 'mut', 0, 400, 1) +
+    T(360, 72, '', {z: 13, a: 'end', id: 'mrem', c: 'blue'});
+}
+
+/* beeswarm: place dots on a row without overlap */
+function swarm(pts, y0, r, maxOff) {
+  const placed = [], out = [];
+  pts.map((p, i) => ({...p, i})).sort((a, b) => a.x - b.x).forEach(p => {
+    const offs = [0]; for (let k = 1; k < 12; k++) offs.push(k * r * 1.7, -k * r * 1.7);
+    let dy = 0;
+    for (const o of offs) { if (Math.abs(o) > maxOff) continue; if (placed.every(q => (q.x - p.x) ** 2 + (q.y - (y0 + o)) ** 2 >= (2 * r + .6) ** 2)) { dy = o; break; } }
+    const q = {x: p.x, y: y0 + dy}; placed.push(q); out[p.i] = q;
+  });
+  return out;
+}
+/* the three arrangements of the 20 dots: mixed (one row), by language (2 rows), by model (10 rows) */
+const ROWS = {all: [190], lang: [130, 250], model: DATA.models.map((_, i) => 82 + i * 22)};
+function layoutFor(task, mode) {
+  const d = DATA[task], items = [];
+  d.cpp.forEach((v, m) => items.push({t: v, lang: 0, m})); d.java.forEach((v, m) => items.push({t: v, lang: 1, m}));
+  const gm = arr => Math.exp(arr.reduce((a, it) => a + Math.log(it.t), 0) / arr.length);
+  const groups = mode === 'all' ? [items] : mode === 'lang' ? [0, 1].map(l => items.filter(it => it.lang === l)) : DATA.models.map((_, m) => items.filter(it => it.m === m));
+  const pos = [], means = [];
+  groups.forEach((g, gi) => {
+    const y0 = ROWS[mode][gi], r = mode === 'model' ? 4.5 : 5;
+    const sw = swarm(g.map(it => ({x: X(it.t)})), y0, r, mode === 'model' ? 0 : mode === 'lang' ? 34 : 40);
+    g.forEach((it, k) => { pos[items.indexOf(it)] = sw[k]; });
+    const h = mode === 'model' ? 8 : mode === 'lang' ? 38 : 46;
+    means.push({x: X(gm(g)), y0: y0 - h, y1: y0 + h});
+  });
+  return {items, pos, means};
+}
+/* draws the 20 dots and returns setMode(mode); dots keep their identity when they regroup */
+function dotPlot(s, task) {
+  const gL = s.el('g', {}), gM = s.el('g', {});
+  const L0 = layoutFor(task, 'all');
+  const U = s.units(L0.items, {r: 5});
+  U.forEach((u, j) => { const p = L0.pos[j]; u.x = p.x; u.y = p.y; u.c.setAttribute('cx', p.x); u.c.setAttribute('cy', p.y);
+    u.c.style.fill = u.it.lang ? C.fill.amber : C.fill.green; u.c.setAttribute('stroke', C.bg); u.c.setAttribute('stroke-width', 1); u.c.style.opacity = 0; });
+  U.forEach((u, j) => s.at(200 + j * 40, () => { u.c.style.opacity = 1; }));
+  const labels = s.el('g', {});
+  let mode = null, busy = 0;
+  function residuals(L, delay) {
+    gL.innerHTML = ''; gM.innerHTML = '';
+    L.means.forEach(mn => { const e = s.el('line', {x1: mn.x, x2: mn.x, y1: mn.y0, y2: mn.y1, stroke: C.ink, 'stroke-width': 1.6, 'stroke-dasharray': '3 3'}, gM); s.fadeIn(e, 300, delay); });
+    L.items.forEach((it, j) => {
+      const grp = mode === 'all' ? 0 : mode === 'lang' ? it.lang : it.m, mn = L.means[grp], p = L.pos[j];
+      const e = s.el('line', {x1: p.x, x2: mn.x, y1: p.y, y2: p.y, stroke: C.mut, 'stroke-width': 1.3, 'stroke-opacity': .8}, gL); s.fadeIn(e, 300, delay + 100);
+    });
+  }
+  function rowLabels(m, delay) {
+    labels.innerHTML = '';
+    const add = (y, txt, c) => labels.appendChild(s.write(96, y + 4.5, txt, {z: 13, a: 'end', c, t: delay}));
+    if (m === 'all') { add(190, 'all 20', 'ink'); labels.appendChild(s.write(layoutFor(task, 'all').means[0].x, 136, 'average', {h: 1, z: 17, c: 'ink', t: delay})); }
+    if (m === 'lang') { add(130, 'C++', 'green'); add(250, 'Java', 'amber'); }
+    if (m === 'model') DATA.short.forEach((nm, i) => add(ROWS.model[i], nm, 'ink'));
+  }
+  function setMeter(m) {
+    const sp = SPLIT[task], removed = m === 'lang' ? sp.lang : m === 'model' ? sp.model : 0;
+    const bar = s.q('#mbar'); bar.style.fill = m === 'model' ? C.fill.violet : C.fill.blue;
+    s.bar(bar, removed, 700);
+    s.swap('#mtxt', 'Variation left: ' + pc(1 - removed));
+    s.swap('#mrem', m === 'all' ? '' : 'removed by ' + (m === 'lang' ? 'language' : 'model') + ': ' + pc(removed), m === 'model' ? 'violet' : 'blue');
+  }
+  async function setMode(m) {
+    if (m === mode) return; const my = ++busy;
+    mode = m; const L = layoutFor(task, m);
+    gL.innerHTML = ''; gM.innerHTML = ''; labels.innerHTML = '';
+    await s.arrange((it, j) => ({x: L.pos[j].x, y: L.pos[j].y, r: m === 'model' ? 4.5 : 5}), {du: 800, stagger: 12});
+    if (my !== busy) return;
+    rowLabels(m, 0); residuals(L, 150); s.at(500, () => setMeter(m));
+  }
+  return {setMode};
+}
+function groupButtons(s, plot, onPick) {
+  const bs = {};
+  const press = m => { Object.entries(bs).forEach(([k, b]) => b.setAttribute('aria-pressed', k === m ? 'true' : 'false')); plot.setMode(m); onPick && onPick(m); };
+  bs.all = s.btn('', 'Mixed', () => press('all'));
+  bs.lang = s.btn('', 'By language', () => press('lang'), {primary: true});
+  bs.model = s.btn('', 'By model', () => press('model'), {primary: true});
+  bs.all.setAttribute('aria-pressed', 'true');
+  return {bs, press};
+}
+
+const SP = SPLIT.springs, LG = SPLIT.ledger;
+const CAP3 = {
+  all: 'Tap By language: each dot is now measured from its own language’s average, and the grey lines shrink. Then tap By model. The share that disappears is the share that factor explains.',
+  lang: `By language: C++ and Java form two tight groups. Knowing the language removes ${pc(SP.lang)} of the variation in these 20 springs programs.`,
+  model: `By model: each model’s C++ and Java dots sit far apart, so knowing the model removes only ${pc(SP.model)}. For springs, the language sets the speed.`,
+};
+const CAP4 = {
+  ask: 'Ledger adds up a million bank records stored as text. Same 10 models, C++ and Java. Which grouping will remove more of the variation here?',
+  right: `Right. By model removes ${pc(LG.model)}, by language only ${pc(LG.lang)}. A model’s C++ and Java land close together, and the slowest model is slow in both. Tap to compare.`,
+  wrong: `Not quite. By language removes only ${pc(LG.lang)}; by model removes ${pc(LG.model)}. A model’s C++ and Java land close together, and the slowest model is slow in both. Tap to compare.`,
+  lang: `By language: C++ and Java overlap almost completely. Knowing the language removes only ${pc(LG.lang)} of the variation in these 20 ledger programs.`,
+  model: `By model: each model’s two dots sit close together. Knowing the model removes ${pc(LG.model)}. For ledger, the model sets the speed.`,
+};
+const taskCap = r => {
+  const [nm, kind, l, m, rest] = r;
+  return `${nm} (${kind}): language ${pc(l)}, model ${pc(m)}, rest ${pc(rest)}. ` +
+    (l > m ? 'Whichever model wrote it, the language sets most of the speed.' : 'The model’s choices set more of the speed than the language does.');
+};
+const POOLCAP = `All 8 tasks pooled: language ${pc(DATA.pooled[0])}, model ${pc(DATA.pooled[1])}, rest ${pc(DATA.pooled[2])}. Close overall; which one leads depends on the kind of work.`;
+const CAP5 = 'The same split for all 60 programs of each task (6 languages). Blue: share explained by the language. Violet: by the model. Grey: the rest. Tap a task.';
+
+K.stepper({
+  root: '#x', style: 'chalkboard', viewBox: [380, 380],
+  title: 'Which matters more for how fast AI-written code runs: the programming language or the AI model that wrote it?',
+  legend: [
+    {key: 'cpp', label: 'C++ program', color: 'fill.green'},
+    {key: 'java', label: 'Java program', color: 'fill.amber'},
+    {key: 'lang', label: 'Explained by language', color: 'fill.blue'},
+    {key: 'model', label: 'Explained by model', color: 'fill.violet'},
+    {key: 'rest', label: 'Rest (combinations, timing noise)', color: 'faint'},
+  ],
+  extraCaptions: [...Object.values(CAP3), ...Object.values(CAP4), ...DATA.perTask.map(taskCap), POOLCAP],
+  steps: [
+    { title: '1. Sixty programs per task', keys: ['cpp', 'java'],
+      cap: 'Ten AI models each wrote the same task in six languages: 60 programs, all with correct output. When their speeds differ, is that mostly the language or mostly the model?',
+      draw: () => {
+        const L = ['Rust', 'C++', 'Go', 'C#', 'Java', 'JS'];
+        let m = '';
+        L.forEach((l, c) => { m += T(140 + c * 42, 40, l, {z: 14, c: c === 1 ? 'green' : c === 4 ? 'amber' : 'ink', t: 100 + c * 60}); });
+        DATA.short.forEach((nm, r) => {
+          const y = 66 + r * 24;
+          m += T(116, y + 4.5, nm, {z: 13, a: 'end', c: 'mut', t: 400 + r * 50});
+          L.forEach((_, c) => { const fill = c === 1 ? C.fill.green : c === 4 ? C.fill.amber : C.ink;
+            m += `<circle cx="${140 + c * 42}" cy="${y}" r="5.5" fill="${fill}" fill-opacity="${c === 1 || c === 4 ? 1 : .55}" data-k="fade" data-t="${600 + r * 40 + c * 25}" data-d="300"/>`; });
+        });
+        m += T(190, 330, 'each dot = one program', {z: 13, c: 'mut', t: 1500});
+        m += T(190, 362, 'Which sets the speed more?', {h: 1, z: 21, c: 'ink', t: 1800});
+        return m;
+      },
+      start(s) {
+        s.at(2300, () => s.ring(164, 26, 36, 278, 'green'));
+        s.at(3300, () => s.ring(16, 54, 352, 24, 'violet'));
+      },
+      duration: 4200 },
+
+    { title: '2. What variation means', keys: ['cpp', 'java'],
+      cap: 'One task, springs, written in C++ and Java by all 10 models. Each dot is one program’s run time. The grey lines show how far each dot sits from the average: together, that is the variation.',
+      draw: () => meter('springs') + axis(200),
+      start(s) { const pl = dotPlot(s, 'springs'); s.at(1300, () => pl.setMode('all')); },
+      duration: 3600 },
+
+    { title: '3. Your turn: sort the dots', keys: ['cpp', 'java', 'lang', 'model'],
+      cap: CAP3.all,
+      draw: () => meter('springs') + axis(0),
+      start(s) {
+        const pl = dotPlot(s, 'springs'); s.at(700, () => pl.setMode('all'));
+        groupButtons(s, pl, m => s.cap(CAP3[m]));
+      },
+      demo: async s => { const b = s.act.querySelectorAll('button'); s.tap(b[1]); await s.wait(3200); s.tap(b[2]); await s.wait(3200); },
+      idleDemo: 5000, demoDuration: 6600, duration: 2200 },
+
+    { title: '4. Now you guess: ledger', keys: ['cpp', 'java', 'lang', 'model'], ask: true,
+      cap: CAP4.ask,
+      draw: () => meter('ledger') + axis(0),
+      start(s) {
+        const pl = dotPlot(s, 'ledger'); s.at(700, () => pl.setMode('all'));
+        const answer = pick => {
+          s.act.innerHTML = '';
+          const fb = pick === 'model' ? CAP4.right : CAP4.wrong;
+          const g = groupButtons(s, pl, m => s.cap(m === 'all' ? fb : CAP4[m]));
+          g.press('model'); s.cap(fb);
+        };
+        s.btn('', 'Language', () => answer('lang'), {primary: true});
+        s.btn('', 'Model', () => answer('model'), {primary: true});
+      },
+      demo: async s => { await s.wait(600); s.tap(s.act.querySelectorAll('button')[0]); await s.wait(3500); s.tap(s.act.querySelectorAll('button')[1]); await s.wait(3000); },
+      demoDuration: 7400, duration: 2200 },
+
+    { title: '5. All eight tasks', keys: ['lang', 'model', 'rest'],
+      cap: CAP5,
+      draw: () => {
+        const BX = 112, BW = 248;
+        let m = '';
+        const row = (y, r, i, label) => {
+          const [nm, , l, md] = r, t = 200 + i * 90;
+          let g = `<g id="row${i}" style="transition:opacity .35s">`;
+          g += `<rect x="12" y="${y - 7}" width="356" height="32" fill="transparent"/>`;
+          g += T(BX - 8, y + 14, label || nm, {z: 14, a: 'end', c: 'ink', t});
+          g += `<rect x="${BX}" y="${y + 1}" width="${BW * l}" height="18" fill="${C.fill.blue}" data-k="fade" data-t="${t}" data-d="400"/>`;
+          g += `<rect x="${BX + BW * l}" y="${y + 1}" width="${BW * md}" height="18" fill="${C.fill.violet}" data-k="fade" data-t="${t + 100}" data-d="400"/>`;
+          g += `<rect x="${BX + BW * (l + md)}" y="${y + 1}" width="${BW * (1 - l - md)}" height="18" fill="${C.faint}" data-k="fade" data-t="${t + 150}" data-d="400"/>`;
+          if (BW * l > 34) g += T(BX + 5, y + 15, pc(l), {z: 13, a: 'start', c: '#101214', w: 600, t: t + 200});
+          if (BW * md > 34) g += T(BX + BW * l + 5, y + 15, pc(md), {z: 13, a: 'start', c: '#101214', w: 600, t: t + 250});
+          return g + '</g>';
+        };
+        m += row(20, ['all', '', ...DATA.pooled], 8, 'All 8 tasks');
+        m += P(line(16, 60, 364, 60, 21, .4), 'faint', 100, 400, 1);
+        m += T(16, 82, 'Language bigger', {h: 1, z: 19, a: 'start', c: 'blue', t: 300});
+        DATA.perTask.slice(0, 4).forEach((r, i) => { m += row(90 + i * 32, r, i); });
+        m += T(16, 238, 'Model bigger', {h: 1, z: 19, a: 'start', c: 'violet', t: 700});
+        DATA.perTask.slice(4).forEach((r, i) => { m += row(246 + i * 32, r, i + 4); });
+        m += `<line x1="${BX + BW / 2}" x2="${BX + BW / 2}" y1="66" y2="374" stroke="${C.ink}" stroke-opacity=".35" stroke-dasharray="2 3"/>`;
+        m += T(BX + BW / 2 + 4, 82, 'half', {z: 13, a: 'start', c: 'mut', t: 900});
+        return m;
+      },
+      start(s) {
+        const pick = i => {
+          for (let k = 0; k <= 8; k++) s.q('#row' + k).style.opacity = k === i ? 1 : .35;
+          s.cap(i === 8 ? POOLCAP : taskCap(DATA.perTask[i]));
+        };
+        for (let k = 0; k <= 8; k++) s.on('#row' + k, () => pick(k), k === 8 ? 'All tasks pooled' : DATA.perTask[k][0]);
+      },
+      demo: async s => { for (const k of [0, 7, 8]) { s.tap('#row' + k); await s.wait(2600); } },
+      idleDemo: 6000, demoDuration: 7800, duration: 1900 },
+
+    { title: '6. Why the model matters', keys: ['cpp'],
+      cap: `A model’s way of reading text and its choice of lookup table go with it into every language. On ledger the slowest model’s C++ took 11.4 s; the fastest JavaScript took ${DATA.ledgerJsFastest} s.`,
+      draw: () => {
+        let m = axis(0);
+        m += T(16, 92, 'ledger: C++ by 10 models', {h: 1, z: 19, a: 'start', c: 'ink', t: 200});
+        const sw = swarm(DATA.ledger.cpp.map(v => ({x: X(v)})), 130, 5, 20);
+        sw.forEach((p, i) => { m += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${C.fill.green}" stroke="${C.bg}" data-k="fade" data-t="${500 + i * 60}" data-d="300"/>`; });
+        const xs = X(11.4), xj = X(DATA.ledgerJsFastest);
+        m += T(xs, 158, '11.4 s', {z: 13, c: 'green', t: 1300});
+        m += T(xs, 174, 'slowest', {z: 13, c: 'green', t: 1300});
+        m += `<line x1="${xj}" x2="${xj}" y1="104" y2="196" stroke="${C.ink}" stroke-width="1.6" stroke-dasharray="4 3" data-k="fade" data-t="1600" data-d="400"/>`;
+        m += T(xj + 6, 112, 'fastest JavaScript', {z: 13, a: 'start', c: 'ink', t: 1700});
+        m += T(xj + 6, 194, DATA.ledgerJsFastest + ' s', {z: 13, a: 'start', c: 'ink', t: 1700});
+        const [a, b] = DATA.wordpairsCpp, xa = X(a), xb = X(b), xw = X(DATA.wordpairsJsFastest);
+        m += T(16, 228, 'wordpairs: C++, fastest to slowest model', {h: 1, z: 19, a: 'start', c: 'ink', t: 2000});
+        m += P(line(xa, 262, xb, 262, 31, .3), 'green', 2200, 500, 2.5);
+        m += `<circle cx="${xa}" cy="262" r="5" fill="${C.fill.green}" data-k="fade" data-t="2200" data-d="300"/><circle cx="${xb}" cy="262" r="5" fill="${C.fill.green}" data-k="fade" data-t="2600" data-d="300"/>`;
+        m += T(xa, 288, a + ' s', {z: 13, c: 'green', t: 2500});
+        m += T(xb, 288, b + ' s', {z: 13, c: 'green', t: 2700});
+        m += `<line x1="${xw}" x2="${xw}" y1="244" y2="276" stroke="${C.ink}" stroke-width="1.6" stroke-dasharray="4 3" data-k="fade" data-t="2900" data-d="400"/>`;
+        m += T(xw + 6, 250, 'fastest JS ' + DATA.wordpairsJsFastest + ' s', {z: 13, a: 'start', c: 'ink', t: 3000});
+        return m;
+      },
+      duration: 3600 },
+
+    { title: '7. What to do with this', keys: ['lang', 'model'],
+      cap: 'For number crunching, the language you ask for decides most of the speed. For reading text and lookups, check and time what the model wrote: another model can matter more than another language.',
+      draw: () => {
+        const r = DATA.perTask, f = nm => r.find(x => x[0] === nm);
+        let m = '';
+        m += P(rect(14, 12, 352, 112, 41), 'blue', 100, 700, 1.6);
+        m += T(28, 42, 'Number crunching', {h: 1, z: 23, a: 'start', c: 'blue', t: 500});
+        m += T(28, 66, 'springs, heat', {z: 14, a: 'start', c: 'mut', t: 650});
+        m += T(28, 90, 'Choose the language: it explained', {z: 15, a: 'start', c: 'ink', t: 800});
+        m += T(28, 110, `${pc(f('heat')[2])} and ${pc(f('springs')[2])} of the variation.`, {z: 15, a: 'start', c: 'ink', t: 850});
+        m += P(rect(14, 136, 352, 112, 42), 'violet', 1100, 700, 1.6);
+        m += T(28, 166, 'Reading text, lookups', {h: 1, z: 23, a: 'start', c: 'violet', t: 1500});
+        m += T(28, 190, 'wordpairs, ledger, logscan, routes', {z: 14, a: 'start', c: 'mut', t: 1650});
+        const ms = ['wordpairs', 'ledger', 'logscan', 'routes'].map(n => f(n)[3]);
+        m += T(28, 214, 'Check and time the code: the model', {z: 15, a: 'start', c: 'ink', t: 1800});
+        m += T(28, 234, `explained ${pc(Math.min(...ms))} to ${pc(Math.max(...ms))} of the variation.`, {z: 15, a: 'start', c: 'ink', t: 1850});
+        m += T(16, 278, 'Limits', {h: 1, z: 19, a: 'start', c: 'ink', t: 2300});
+        m += T(16, 300, '10 models, 8 tasks, timed on one Windows laptop.', {z: 13, a: 'start', c: 'mut', t: 2400});
+        m += T(16, 320, `Python left out: with it, the language explains ${pc(DATA.withPython)},`, {z: 13, a: 'start', c: 'mut', t: 2500});
+        m += T(16, 340, 'which only says Python is far slower.', {z: 13, a: 'start', c: 'mut', t: 2500});
+        m += T(16, 360, 'Shares are of variation in log run time.', {z: 13, a: 'start', c: 'mut', t: 2600});
+        return m;
+      },
+      duration: 3200 },
+  ],
+});
+
+</script>
+</body></html>

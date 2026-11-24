@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Language speed gap</title>
+<style>:root{color-scheme:dark}html,body{margin:0;background:#141517}body{padding:16px;min-height:100vh;box-sizing:border-box}</style>
+</head><body>
+<div id="x"></div>
+<script>
+/* explainer-kit v1.2. A small engine for animated, stepwise SVG explainers. No dependencies.
+   Exposes window.K. Read explainer-kit/SKILL.md for the API and the rules it encodes.
+   Every animation is tied to a "generation": moving to another step cancels all timers,
+   loops and tweens of the old step, so steps can never bleed into each other. */
+(function () {
+'use strict';
+const NS = 'http://www.w3.org/2000/svg';
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const QS = new URLSearchParams(location.search);
+const REC = QS.has('record');
+const f = n => (+n).toFixed(1);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = { inOut: k => k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2, out: k => 1 - Math.pow(1 - k, 3), linear: k => k };
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+function rng(seed) { let a = seed >>> 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+/* ---------- styles: one object per look. ink colours draw lines and text; fill colours encode data
+   (every pair of fills stays apart under simulated protan, deutan and tritan vision, and each has contrast
+   of at least 3 against its background; scripts/check_theme.py --builtin shows the numbers). */
+const STYLES = {
+  chalkboard: { dark: 1, bg: '#1E2023', panel: '#17191B', ink: '#ECE7DA', mut: '#9A9A93', faint: '#55585E', line: '#4A4D53',
+    blue: '#9CC3E6', green: '#A8DDC3', amber: '#F2D98B', violet: '#C3B5E8', red: '#EBA494',
+    fill: { blue: '#3F82AE', amber: '#C38719', green: '#28AD7E', violet: '#A070E8', red: '#D34144' },
+    rough: 1, texture: 1, hand: "'Caveat', cursive", handSize: 1.12, font: 'https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap' },
+  paper: { dark: 0, bg: '#FBF8F1', panel: '#F3EEE3', ink: '#22252A', mut: '#5F6368', faint: '#C9C3B6', line: '#BDB6A8',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#0080D4', amber: '#C27C12', green: '#227D54', violet: '#87559D', red: '#CF2627' },
+    rough: .7, texture: 0, hand: "'Kalam', cursive", handSize: 1, font: 'https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&display=swap' },
+  editorial: { dark: 0, bg: '#FFFFFF', panel: '#F5F5F2', ink: '#1A1A1A', mut: '#5C5C5C', faint: '#D6D6D0', line: '#C4C4BE',
+    blue: '#2F6DB5', green: '#1E7F55', amber: '#C27C12', violet: '#7B5EA7', red: '#C8553D',
+    fill: { blue: '#0080D4', amber: '#C27C12', green: '#227D54', violet: '#87559D', red: '#CF2627' },
+    rough: 0, texture: 0, hand: "'Source Serif 4', Georgia, serif", handSize: .9, font: 'https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&display=swap' },
+  blueprint: { dark: 1, bg: '#10243A', panel: '#0C1C2E', ink: '#E6EEF5', mut: '#93A8BC', faint: '#3A5672', line: '#4A6A89',
+    blue: '#8EC5F0', green: '#9BE0C0', amber: '#F5D58A', violet: '#C9B8F2', red: '#F2A08F',
+    fill: { blue: '#3F82AE', amber: '#C38719', green: '#28AD7E', violet: '#A070E8', red: '#D34144' },
+    rough: 0, texture: 0, grid: 1, hand: "'IBM Plex Mono', ui-monospace, monospace", handSize: .78, font: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&display=swap' },
+};
+let ST = STYLES.chalkboard, ROUGH = 1;
+const C = {};                                   // active colours, e.g. K.C.ink, K.C.fill.blue
+function col(c) { if (!c) return C.ink; if (c[0] === '#' || c.startsWith('rgb') || c === 'none' || c === 'transparent') return c; if (c.startsWith('fill.')) return C.fill[c.slice(5)] || c; return C[c] || c; }
+/* A theme is an object instead of a style name: your own colours and fonts merged over a built-in base
+   (references/themes.md). Slot names stay the same, so scene code works with any theme. */
+function resolveStyle(name) {
+  if (name && typeof name === 'object') {
+    const t = name, lum = h => { const v = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+    const dark = 'dark' in t ? !!t.dark : (t.bg ? lum(t.bg) < .18 : false);
+    const base = t.base in STYLES ? t.base : dark ? 'blueprint' : 'editorial';
+    const st = { ...STYLES[base], ...t, fill: { ...STYLES[base].fill, ...(t.fill || {}) }, dark: dark ? 1 : 0 };
+    if (!t.base && !('grid' in t)) st.grid = 0;
+    if (t.hand && !('font' in t)) st.font = null;           // a theme font that is installed locally, or a system font
+    return [st, base];
+  }
+  return name in STYLES ? [STYLES[name], name] : [STYLES.chalkboard, 'chalkboard'];
+}
+function useStyle(name, root) {
+  let base; [ST, base] = resolveStyle(name); ROUGH = ST.rough || 0;
+  Object.keys(C).forEach(k => delete C[k]); Object.assign(C, ST, { fill: { ...ST.fill } });
+  injectCSS();
+  [].concat(ST.font || []).forEach(u => { if (!document.querySelector(`link[href="${u}"]`)) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); } });
+  if (root) {
+    const v = { bg: ST.bg, panel: ST.panel, ink: ST.ink, mut: ST.mut, faint: ST.faint, line: ST.line, blue: ST.blue, green: ST.green, amber: ST.amber, violet: ST.violet, red: ST.red, hand: ST.hand };
+    for (const k in v) root.style.setProperty('--k-' + k, v[k]);
+    if (ST.sans) root.style.setProperty('--font-sans', ST.sans);
+    root.classList.add('kx', 'kx-' + base);
+    if (ST.texture) { const r = rng(9); let s = ''; for (let i = 0; i < 140; i++) s += `<circle cx='${(r() * 240).toFixed(1)}' cy='${(r() * 240).toFixed(1)}' r='${(.4 + r() * .8).toFixed(2)}' fill='%23ffffff' fill-opacity='${(.02 + r() * .045).toFixed(3)}'/>`; root.style.backgroundImage = `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>${s}</svg>")`; }
+    if (ST.grid) root.style.backgroundImage = `linear-gradient(${ST.faint}55 1px,transparent 1px),linear-gradient(90deg,${ST.faint}55 1px,transparent 1px)`, root.style.backgroundSize = '20px 20px';
+  }
+  return ST;
+}
+function fontsReady(ms = 1500) { const fams = [ST.hand, ST.sans].filter(Boolean).map(h => h.split(',')[0]); return Promise.race([document.fonts ? document.fonts.ready.then(() => Promise.all(fams.map(f => document.fonts.load(`20px ${f}`)))) : Promise.resolve(), new Promise(r => setTimeout(r, ms))]).catch(() => {}); }
+
+/* ---------- hand-drawn geometry. Each shape takes a seed so its wobble is identical on every frame. */
+const J = (r, a) => (r() - .5) * 2 * a * ROUGH;
+function line(x1, y1, x2, y2, seed = 1, bow = 1.6) { const r = rng(seed); return `M${f(x1 + J(r, .5))} ${f(y1 + J(r, .5))} Q${f((x1 + x2) / 2 + J(r, bow))} ${f((y1 + y2) / 2 + J(r, bow))} ${f(x2)} ${f(y2)}`; }
+function rect(x, y, w, h, seed = 1) {
+  if (!ROUGH) return `M${f(x)} ${f(y)}H${f(x + w)}V${f(y + h)}H${f(x)}Z`;
+  const r = rng(seed), p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(q => [q[0] + J(r, 1.3), q[1] + J(r, 1.3)]);
+  let d = `M${f(p[0][0])} ${f(p[0][1])}`;
+  for (let i = 0; i < 4; i++) { const A = p[i], B = p[(i + 1) % 4]; d += ` Q${f((A[0] + B[0]) / 2 + J(r, 1.5))} ${f((A[1] + B[1]) / 2 + J(r, 1.5))} ${f(B[0])} ${f(B[1])}`; }
+  return d + ` L${f(p[0][0] + (p[1][0] - p[0][0]) * .08)} ${f(p[0][1] + J(r, 1))}`;
+}
+function ellipse(cx, cy, rx, ry = rx, seed = 1) { const r = rng(seed); return `M${f(cx - rx)} ${f(cy)} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx + rx)} ${f(cy + J(r, .6))} A${f(rx)} ${f(ry + J(r, .6))} 0 1 0 ${f(cx - rx + 1.5 * ROUGH)} ${f(cy + .6 * ROUGH)}`; }
+function arrow(fx, fy, x, y, seed = 1, L = 8) { const a = Math.atan2(y - fy, x - fx), r = rng(seed), k = .5 + J(r, .06); return `M${f(x - L * Math.cos(a - k))} ${f(y - L * Math.sin(a - k))} L${f(x)} ${f(y)} L${f(x - L * Math.cos(a + k))} ${f(y - L * Math.sin(a + k))}`; }
+function poly(pts, seed = 1) { const r = rng(seed); return 'M' + pts.map((p, i) => `${f(p[0] + (i ? J(r, .6) : 0))} ${f(p[1] + (i ? J(r, .6) : 0))}`).join(' L'); }
+function curve(x1, y1, x2, y2, bend = .3) { const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1; return `M${f(x1)} ${f(y1)} Q${f(mx - dy * bend)} ${f(my + dx * bend)} ${f(x2)} ${f(y2)}`; }
+
+/* ---------- markup builders. Elements carry data-k (draw|fade), data-t (delay ms) and data-d (duration ms);
+   the engine reveals them in that order when a step opens, and shows them at once with reduced motion. */
+function P(d, c, t = 0, du = 600, w = 1.5, extra = '') { return `<path d="${d}" fill="none" stroke="${col(c)}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" data-k="draw" data-t="${t}" data-d="${du}" ${extra}/>`; }
+function T(x, y, s, o = {}) {
+  const fam = o.h ? 'var(--k-hand)' : o.m ? 'var(--font-mono, ui-monospace, Menlo, monospace)' : 'var(--font-sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif)';
+  const z = (o.z || 12) * (o.h ? ST.handSize : 1);
+  return `<text${o.id ? ` id="${o.id}"` : ''} x="${x}" y="${y}" text-anchor="${o.a || 'middle'}" font-size="${f(z)}"${o.w ? ` font-weight="${o.w}"` : ''} fill="${col(o.c)}" style="font-family:${fam};font-variant-numeric:tabular-nums" data-k="fade" data-t="${o.t || 0}" data-d="${o.d || 450}"${o.extra ? ' ' + o.extra : ''}>${o.raw ? s : esc(s)}</text>`;
+}
+function F(shape, c, t = 0, o = {}) { return `<path d="${shape}" fill="${col(c)}" fill-opacity="${o.op == null ? .85 : o.op}" stroke="none" data-k="fade" data-t="${t}" data-d="${o.d || 450}"${o.id ? ` id="${o.id}"` : ''}/>`; }
+function reveal(svg) {
+  const els = [...svg.querySelectorAll('[data-k]')];
+  if (RM) { els.forEach(e => { e.style.opacity = 1; e.style.strokeDashoffset = 0; }); return 0; }
+  let end = 0;
+  els.forEach(e => { e.style.transition = 'none'; const t = +e.dataset.t, d = +e.dataset.d; end = Math.max(end, t + d); if (e.dataset.k === 'draw') { const L = e.getTotalLength() + 1; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; } else e.style.opacity = 0; });
+  svg.getBoundingClientRect();
+  requestAnimationFrame(() => requestAnimationFrame(() => els.forEach(e => { const t = e.dataset.t, d = e.dataset.d; if (e.dataset.k === 'draw') { e.style.transition = `stroke-dashoffset ${d}ms cubic-bezier(.45,0,.55,1) ${t}ms`; e.style.strokeDashoffset = 0; } else { e.style.transition = `opacity ${d}ms ease ${t}ms`; e.style.opacity = 1; } })));
+  return end;
+}
+function finish(svg) { svg.querySelectorAll('[data-k]').forEach(e => { e.style.transition = 'none'; e.style.strokeDashoffset = 0; e.style.opacity = 1; }); }
+
+/* ---------- small DOM helpers */
+function mk(tag, attrs = {}, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+const ICON = {
+  left: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  right: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  play: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>',
+  replay: '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12l5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+let cssDone = false;
+function injectCSS() {
+  if (cssDone) return; cssDone = true;
+  const s = document.createElement('style');
+  s.textContent = `.kx{background-color:var(--k-bg);color:var(--k-ink);border-radius:16px;padding:14px 10px 12px;font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif);max-width:560px;margin:0 auto;position:relative;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+.kx *{box-sizing:border-box}.kx svg.kx-stage{display:block;width:100%;height:auto;overflow:visible;transition:opacity .22s ease}
+.kx-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 6px;min-height:28px}
+.kx-title{font-family:var(--k-hand);font-size:23px;line-height:1.15}.kx-blueprint .kx-title,.kx-editorial .kx-title{font-size:19px}
+.kx-count{font-size:12px;color:var(--k-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.kx-cap{font-size:13.5px;line-height:1.55;margin:6px 8px 8px;color:var(--k-ink)}
+.kx-act{display:flex;justify-content:center;align-items:center;gap:8px;min-height:44px;flex-wrap:wrap;margin:0 4px 4px}
+.kx-legend{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px 12px;font-size:12px;color:var(--k-mut);margin:6px 8px 8px;min-height:40px}.kx-legend>span{transition:opacity .4s}
+.kx-sw{display:inline-block;width:12px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.kx-nav{display:flex;align-items:center;gap:8px}.kx button.kx-next{min-width:112px}.kx-act .kx-ctl{flex:1 1 100%}
+@media (max-width:480px){.kx{padding:12px 8px 10px}.kx button.kx-next{min-width:96px;padding:0 8px}.kx button.kx-dot{padding:10px 3px}.kx-nav{gap:6px}}
+.kx button{background:transparent;border:1px solid var(--k-line);color:var(--k-ink);border-radius:8px;padding:0 12px;font:inherit;font-size:13px;min-height:40px;min-width:40px;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}
+.kx button:hover{border-color:var(--k-mut)}.kx button:focus-visible,.kx [role=button]:focus-visible{outline:2px solid var(--k-violet);outline-offset:2px}
+.kx button.pri{border-color:var(--k-violet);color:var(--k-violet)}.kx button[aria-pressed=true]{background:color-mix(in srgb,var(--k-violet) 18%,transparent)}
+.kx-dots{display:flex;flex:1;justify-content:center;flex-wrap:nowrap;min-width:0}
+.kx button.kx-dot{padding:10px 5px;border:0;min-height:0;min-width:0;background:none}
+.kx-dot i{width:8px;height:8px;border-radius:50%;border:1px solid var(--k-mut);display:inline-block}.kx-dot[aria-current=step] i{background:var(--k-ink);border-color:var(--k-ink)}
+.kx-log{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:18px;height:98px;overflow:hidden;background:var(--k-panel);border:1px solid var(--k-line);border-radius:8px;padding:6px 8px;margin:8px 4px 0;display:flex;flex-direction:column;justify-content:flex-end;white-space:pre-wrap}
+.kx-scrub{display:flex;align-items:center;gap:8px;margin:6px 4px}.kx-scrub input{flex:1;min-width:60px}.kx button.kx-speed{min-width:46px;padding:0 6px;font-variant-numeric:tabular-nums}
+.kx-time{font-size:12px;color:var(--k-mut);min-width:64px;text-align:right;font-variant-numeric:tabular-nums}
+.kx input[type=range]{accent-color:var(--k-violet);height:32px;width:100%;margin:0}
+.kx-ctl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:12.5px;margin:4px 8px}.kx-ctl output{font-variant-numeric:tabular-nums;color:var(--k-ink);font-weight:600}.kx-ctl input{grid-column:1/3}
+.kx .pulse{animation:kxpl 1.2s ease-in-out 1 forwards}@keyframes kxpl{0%,100%{opacity:0}50%{opacity:.85}}
+.kx-ripple{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;border:2px solid var(--k-ink);pointer-events:none;animation:kxrp .6s ease-out forwards}@keyframes kxrp{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
+.kx-gap{flex:1}.kx-nav.kx-solo{justify-content:center}
+.kx-figure .kx-act:empty,.kx-figure .kx-cap:empty,.kx-figure .kx-nav:empty,.kx-figure .kx-legend:empty{display:none}.kx-figure .kx-act{min-height:0}
+.kx-recording .kx-nav button:not(.kx-dot),.kx-recording .kx-scrub button{visibility:hidden}
+.kx .sr-only,.sr-only{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.kx *{transition:none!important;animation:none!important}}`;
+  document.head.appendChild(s);
+}
+
+/* ---------- step context: everything a step needs, bound to its generation */
+function makeCtx(eng, svg, i) {
+  const g = eng.gen, alive = () => g === eng.gen, dyn = svg.querySelector('.kx-dyn');
+  const q = s => svg.querySelector(s);
+  const pick = e => typeof e === 'string' ? q(e) : e;
+  const s = {
+    i, svg, dyn, q, alive, C, RM, root: eng.root, act: eng.act,
+    at(ms, fn) { const id = setTimeout(() => { if (alive()) fn(); }, ms); eng.timers.push(id); return id; },
+    wait(ms) { return new Promise(r => s.at(ms, () => { if (!(eng.inDemo && eng.touched)) r(); })); },   // an idle demo stops for good once the reader acts
+    loop(delay, fn) { s.at(delay, () => { let last = performance.now(); const t0 = last, st = {}; const k = n => { if (!alive()) return; st.dt = Math.min(.05, Math.max(0, (n - last) / 1000)); last = n; st.e = n - t0; if (fn(st) !== false) requestAnimationFrame(k); }; requestAnimationFrame(k); }); },
+    tween(du, fn, o = {}) { const ez = ease[o.ease || 'inOut']; return new Promise(res => s.at(o.delay || 0, () => { if (RM || du <= 0) { fn(1); res(); return; } const t0 = performance.now(); const k = n => { if (!alive()) return; const p = clamp((n - t0) / du); fn(ez(p)); if (p < 1) requestAnimationFrame(k); else res(); }; requestAnimationFrame(k); })); },
+    el(tag, attrs, parent) { return mk(tag, attrs, parent || dyn); },
+    drawIn(e, du = 500, delay = 0) { e = pick(e); if (!e || RM) return; const L = e.getTotalLength() + 1; e.style.transition = 'none'; e.style.strokeDasharray = L + ' ' + L; e.style.strokeDashoffset = L; e.getBoundingClientRect(); e.style.transition = `stroke-dashoffset ${du}ms cubic-bezier(.45,0,.55,1) ${delay}ms`; e.style.strokeDashoffset = 0; },
+    fadeIn(e, du = 400, delay = 0) { e = pick(e); if (!e) return; e.style.transition = 'none'; e.style.opacity = 0; e.getBoundingClientRect(); e.style.transition = `opacity ${du}ms ease ${delay}ms`; e.style.opacity = 1; },
+    fadeOut(e, du = 400, remove = true) { e = pick(e); if (!e) return; e.style.transition = `opacity ${du}ms`; e.style.opacity = 0; if (remove) setTimeout(() => e.remove(), du + 50); },
+    travel(path, du = 600, c = 'ink', o = {}) {   // a dot that moves along a path element or a list of points
+      let p = pick(path), temp = false;
+      if (Array.isArray(path)) { p = mk('path', { d: 'M' + path.map(q => q.join(' ')).join(' L'), fill: 'none', stroke: col(c), 'stroke-width': 1.6, 'stroke-opacity': o.trail === false ? 0 : .5, 'stroke-linecap': 'round' }, dyn); temp = true; if (o.trail !== false) s.drawIn(p, du); }
+      const d = mk('circle', { r: o.r || 3.6, fill: col(c) }, dyn), L = p.getTotalLength();
+      const done = () => { s.fadeOut(d, 300); if (temp && !o.keep) setTimeout(() => s.fadeOut(p, 450), 200); };
+      if (RM) { const e = p.getPointAtLength(L); d.setAttribute('cx', e.x); d.setAttribute('cy', e.y); done(); return Promise.resolve(); }
+      return s.tween(du, k => { const e = p.getPointAtLength(k * L); d.setAttribute('cx', f(e.x)); d.setAttribute('cy', f(e.y)); }, { delay: o.delay || 0 }).then(done);
+    },
+    ring(x, y, w, h, c = 'ink', o = {}) { const p = mk('path', { d: rect(x, y, w, h, Math.round(x * 7 + y)), fill: 'none', stroke: col(c), 'stroke-width': o.w || 2.4, 'stroke-linecap': 'round', class: 'pulse' }, dyn); p.style.opacity = 0; setTimeout(() => p.remove(), 1400); return p; },
+    write(x, y, text, o = {}) { const w = document.createElementNS(NS, 'g'); w.innerHTML = T(x, y, text, o); const t = w.firstChild; dyn.appendChild(t); t.removeAttribute('data-k'); s.fadeIn(t, o.d || 450, o.t || 0); return t; },
+    float(x, y, text, c = 'ink', z = 16) { const t = s.write(x, y, text, { h: 1, z, c }); if (!RM) { t.style.transition = 'transform 1.1s ease-out, opacity 1.1s ease-out'; requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transform = 'translateY(-18px)'; t.style.opacity = 0; })); } setTimeout(() => t.remove(), 1200); },
+    swap(e, text, c) { e = pick(e); if (!e) return; e.style.transition = 'opacity .15s'; e.style.opacity = 0; s.at(160, () => { e.textContent = text; if (c) e.setAttribute('fill', col(c)); e.style.opacity = 1; }); },
+    count(e, to, o = {}) { e = pick(e); if (!e) return; const from = o.from != null ? o.from : (+e.dataset.v || 0), fmt = o.fmt || (v => Math.round(v).toLocaleString()); e.dataset.v = to; return s.tween(o.du || 900, k => { e.textContent = (o.pre || '') + fmt(lerp(from, to, k)) + (o.post || ''); }, { delay: o.delay || 0 }); },
+    bar(e, frac, du = 600, axis = 'x') { e = pick(e); if (!e) return; e.style.transformBox = 'fill-box'; e.style.transformOrigin = axis === 'x' ? '0 50%' : '50% 100%'; e.style.transition = RM ? 'none' : `transform ${du}ms cubic-bezier(.45,0,.55,1)`; e.style.transform = axis === 'x' ? `scaleX(${clamp(frac).toFixed(4)})` : `scaleY(${clamp(frac).toFixed(4)})`; },
+    btn(icon, label, fn, o = {}) { const b = document.createElement('button'); if (o.primary) b.className = 'pri'; b.innerHTML = (ICON[icon] || '') + esc(label); b.type = 'button'; b.onclick = e => { if (e.isTrusted) s.touched(); fn(b); }; eng.act.appendChild(b); return b; },
+    on(e, fn, label) { e = pick(e); e.setAttribute('role', 'button'); e.setAttribute('tabindex', '0'); if (label) e.setAttribute('aria-label', label); e.style.cursor = 'pointer'; const h = ev => { if (ev.isTrusted) s.touched(); fn(ev); }; e.addEventListener('click', h); e.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); h(ev); } }); return e; },
+    point(ev) { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const m = svg.getScreenCTM(); return m ? pt.matrixTransform(m.inverse()) : { x: 0, y: 0 }; },
+    drag(e, o) { e = pick(e); e.style.touchAction = 'none'; e.style.cursor = 'grab'; let on = false; e.addEventListener('pointerdown', ev => { on = true; e.setPointerCapture(ev.pointerId); s.touched(); o.move && o.move(s.point(ev), ev); }); e.addEventListener('pointermove', ev => { if (on && alive()) o.move && o.move(s.point(ev), ev); }); const up = ev => { if (!on) return; on = false; o.end && o.end(s.point(ev), ev); }; e.addEventListener('pointerup', up); e.addEventListener('pointercancel', up); return e; },
+    cap(text) { eng.cap.textContent = text; },
+    touched() { eng.touched = true; if (eng.stopAuto && !REC) eng.stopAuto(); },   // a reader who acts takes over from autoplay
+    tap(e) { e = pick(e); if (!e || !alive() || (eng.inDemo && eng.touched)) return; const r = e.getBoundingClientRect(), R = eng.root.getBoundingClientRect(), d = document.createElement('div'); d.className = 'kx-ripple'; d.style.left = (r.left + r.width / 2 - R.left) + 'px'; d.style.top = (r.top + r.height / 2 - R.top) + 'px'; eng.root.appendChild(d); setTimeout(() => d.remove(), 650); e.dispatchEvent(new MouseEvent('click', { bubbles: true })); },
+    /* unit charts: one circle per item, keyed, so items keep their identity when they move */
+    units(items, o = {}) { const gU = mk('g', { class: 'kx-units' }, o.parent || dyn); s._units = items.map((it, j) => { const c = mk('circle', { cx: o.x0 || 0, cy: o.y0 || 0, r: o.r || 4, fill: col(o.fill || 'fill.blue') }, gU); c.style.transition = 'fill .5s, opacity .5s'; return { it, c, x: o.x0 || 0, y: o.y0 || 0, r: o.r || 4, j }; }); return s._units; },
+    arrange(layout, o = {}) { const U = s._units || [], du = o.du || 900, stg = o.stagger == null ? 4 : o.stagger, ez = ease[o.ease || 'inOut'];
+      const tg = U.map((u, j) => { const L = layout(u.it, j) || {}; if (L.fill) u.c.style.fill = col(L.fill); if (L.opacity != null) u.c.style.opacity = L.opacity; return { x0: u.x, y0: u.y, r0: u.r, x: L.x == null ? u.x : L.x, y: L.y == null ? u.y : L.y, r: L.r == null ? u.r : L.r, dl: (L.order == null ? j : L.order) * stg }; });
+      const tot = du + Math.max(0, ...tg.map(t => t.dl));
+      return s.tween(tot, k => { const ms = k * tot; U.forEach((u, j) => { const t = tg[j], p = ez(clamp((ms - t.dl) / du)); u.x = lerp(t.x0, t.x, p); u.y = lerp(t.y0, t.y, p); u.r = lerp(t.r0, t.r, p); u.c.setAttribute('cx', f(u.x)); u.c.setAttribute('cy', f(u.y)); u.c.setAttribute('r', f(u.r)); }); }, { ease: 'linear', delay: o.delay || 0 }); },
+  };
+  return s;
+}
+
+/* ---------- stepper: a lesson that moves one idea at a time, with fixed controls */
+const ALL = (window.EXPLAINERS = window.EXPLAINERS || []);
+function frame(root, o, kind) {
+  root = typeof root === 'string' ? document.querySelector(root) : root;
+  useStyle(o.style || 'chalkboard', root);
+  const [W, H] = o.viewBox || [380, 300];
+  /* controls: 'full' (every button), 'minimal' (Back and Next, or play and scrub), 'none' (plays by itself,
+     with only a pause button). A figure defaults to 'none'. Under reduced motion a stepper or player that
+     cannot play itself falls back to 'minimal', so the reader can still move through it. */
+  let ctl = ['full', 'minimal', 'none'].includes(o.controls) ? o.controls : kind === 'figure' ? 'none' : 'full';
+  if (RM && ctl === 'none' && kind !== 'figure') ctl = 'minimal';
+  const legend = (o.legend || []).map(l => `<span data-l="${l.key}"><span class="kx-sw" style="background:${col(l.color)}"></span>${esc(l.label)}</span>`).join('');
+  const B = { back: `<button class="kx-back" type="button" aria-label="Previous">${ICON.left}</button>`, next: '<button class="kx-next" type="button"></button>', dots: '<div class="kx-dots"></div>', gap: '<span class="kx-gap"></span>',
+    replay: `<button class="kx-replay" type="button" aria-label="Replay" title="Replay">${ICON.replay}</button>`, pp: '<button class="kx-pp" type="button"></button>' };
+  let nav = '', scrub = '', solo = false;
+  if (kind === 'stepper') { if (ctl === 'full') nav = B.back + B.dots + B.replay + B.next; else if (ctl === 'minimal') nav = B.back + B.gap + B.next; else { nav = B.pp; solo = true; } }
+  else if (kind === 'player') { scrub = ctl === 'none' ? '' : `<div class="kx-scrub">${B.pp}<input type="range" min="0" step="1" aria-label="Scrub the timeline"><span class="kx-time"></span></div>`;
+    if (ctl === 'full') nav = B.back + B.dots + B.next; else if (ctl === 'none') { nav = B.pp; solo = true; } }
+  else { nav = (o.frame && !RM ? B.pp : '') + (ctl !== 'none' ? B.replay : ''); solo = true; }
+  root.innerHTML = `<h2 class="sr-only">${esc(o.title || '')}</h2><div class="kx-head"><span class="kx-title"></span><span class="kx-count"></span></div>
+<svg class="kx-stage" viewBox="0 0 ${W} ${H}" role="img"></svg><p class="kx-cap" aria-live="polite"></p>${kind === 'player' && o.log ? '<div class="kx-log" aria-hidden="true"></div>' : ''}
+${kind === 'player' ? scrub : '<div class="kx-act"></div>'}
+${legend ? `<div class="kx-legend">${legend}</div>` : ''}${nav ? `<div class="kx-nav${solo ? ' kx-solo' : ''}">${nav}</div>` : ''}`;
+  root.classList.add('kx-' + kind, 'kx-c-' + ctl);
+  if (REC) root.classList.add('kx-recording');
+  const $ = s => root.querySelector(s);
+  return { root, W, H, ctl, svg: $('.kx-stage'), head: $('.kx-head'), cap: $('.kx-cap'), act: $('.kx-act'), title: $('.kx-title'), count: $('.kx-count'), dots: $('.kx-dots'), next: $('.kx-next'), back: $('.kx-back'), replay: $('.kx-replay'), pp: $('.kx-pp'), log: $('.kx-log'), $ };
+}
+function fixWidth(b, labels) {   // size a button to its widest label, so a changing label never moves other controls
+  if (!b) return; const keep = b.innerHTML; b.style.minWidth = ''; let w = 0;
+  for (const h of labels) { b.innerHTML = h; w = Math.max(w, b.getBoundingClientRect().width); }
+  b.innerHTML = keep; b.style.minWidth = Math.ceil(w) + 'px'; }
+function fixCaptionHeight(fr, texts) {   // reserve the tallest caption so nothing below it ever moves
+  const m = fr.cap.cloneNode(); m.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;min-height:0;width:${fr.cap.clientWidth}px`; m.removeAttribute('aria-live'); fr.cap.parentNode.appendChild(m);
+  let h = 0; texts.forEach(t => { m.textContent = t; h = Math.max(h, m.offsetHeight); }); m.remove(); fr.cap.style.minHeight = h + 'px';
+}
+function stepper(o) {
+  const fr = frame(o.root, o, 'stepper'), S = o.steps;
+  if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
+  const eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
+  let cur = 0, first = true, auto = null, ends = [];
+  const PPL = [ICON.pause + 'Pause', ICON.play + 'Play'];
+  const updPP = () => { if (!fr.pp) return; fr.pp.innerHTML = auto ? PPL[0] : PPL[1]; fr.pp.setAttribute('aria-label', auto ? 'Pause' : 'Play'); };
+  eng.stopAuto = () => { auto = null; updPP(); };
+  if (fr.dots) S.forEach((st, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to step ' + (i + 1)); b.innerHTML = '<i></i>'; b.onclick = () => go(i); fr.dots.appendChild(b); });
+  const capTexts = S.map(st => st.cap || '').concat(o.extraCaptions || []);
+  fixCaptionHeight(fr, capTexts); addEventListener('resize', () => fixCaptionHeight(fr, capTexts));
+  const fixNext = () => { fixWidth(fr.next, [ICON.restart + 'Start over', 'Next' + ICON.right]); fixWidth(fr.pp, PPL); };
+  fontsReady().then(() => { fixCaptionHeight(fr, capTexts); fixNext(); });   // a web font can wrap and size text differently once it loads
+  addEventListener('resize', fixNext);
+  function build(i) {
+    cur = i; eng.touched = false; const st = S[i], s = {};
+    fr.svg.innerHTML = (typeof st.draw === 'function' ? st.draw(K) : st.draw || '') + '<g class="kx-dyn"></g>';
+    fr.act.innerHTML = ''; fr.title.textContent = st.title || ''; fr.count.textContent = `Step ${i + 1} of ${S.length}`;
+    fr.svg.setAttribute('aria-label', (st.title || '') + '. ' + (st.alt || st.cap || ''));
+    if (fr.dots) [...fr.dots.children].forEach((d, j) => j === i ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'));
+    fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !st.keys || st.keys.includes(e.dataset.l) ? '' : 'none');   // only this step's colours
+    if (fr.next) fr.next.innerHTML = i === S.length - 1 ? ICON.restart + 'Start over' : 'Next' + ICON.right;
+    fr.cap.style.transition = 'none'; fr.cap.style.opacity = 0; fr.cap.textContent = st.cap || '';
+    const revealEnd = reveal(fr.svg);
+    const ctx = makeCtx(eng, fr.svg, i);
+    ctx.at(st.capDelay == null ? 300 : st.capDelay, () => { fr.cap.style.transition = 'opacity .6s'; fr.cap.style.opacity = 1; });
+    if (st.start) st.start(ctx);
+    eng.inDemo = false;
+    if (st.demo && st.idleDemo && !REC && !st.ask) ctx.at(st.idleDemo, () => { if (!eng.touched) { eng.inDemo = true; Promise.resolve(st.demo(ctx)).finally(() => { eng.inDemo = false; }); } });
+    ends[i] = st.duration || revealEnd + 600;
+    eng.ctx = ctx;
+  }
+  function go(i, keepAuto) {
+    if (!keepAuto && auto) { auto = null; updPP(); }
+    eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = [];
+    i = Math.max(0, Math.min(S.length - 1, i));
+    const g = eng.gen;
+    if (first || RM) { first = false; build(i); fr.svg.style.opacity = 1; }
+    else { fr.svg.style.opacity = 0; setTimeout(() => { if (g === eng.gen) { build(i); fr.svg.style.opacity = 1; } }, 230); }
+  }
+  if (fr.back) fr.back.onclick = () => go(cur - 1);
+  if (fr.next) fr.next.onclick = () => go(cur < S.length - 1 ? cur + 1 : 0);
+  if (fr.replay) fr.replay.onclick = () => go(cur);
+  const autoMode = o.autoplay != null ? o.autoplay : fr.ctl === 'none' ? 'loop' : false;
+  async function runAuto(from, hold, loop) {   // play from step `from`; with loop, start again after the last step
+    const me = auto = {}; updPP();
+    for (;;) {
+      for (let i = from; i < S.length; i++) { if (auto !== me) return; go(i, true); await sleep(260 + api.duration(i)); if (auto !== me) return; if (S[i].demo) { await Promise.race([api.demo(i), sleep(S[i].demoDuration || 12000)]); await sleep(S[i].demoDuration ? 0 : 600); } await sleep(Math.max(hold, readMs(S[i].cap) - api.duration(i))); }
+      if (!loop || auto !== me) break; from = 0;
+    }
+    if (auto === me) { auto = null; updPP(); }
+  }
+  if (fr.pp) fr.pp.onclick = () => { if (auto) eng.stopAuto(); else runAuto(cur, o.hold || 2200, autoMode === 'loop'); };
+  document.addEventListener('keydown', e => { if (e.target.closest && e.target.closest('[role=button],input,button,textarea,select')) return; if (ALL.length > 1 && !fr.root.contains(document.activeElement)) return; if (e.key === 'ArrowRight') go(cur + 1); if (e.key === 'ArrowLeft') go(cur - 1); });
+  const api = {
+    kind: 'stepper', root: fr.root, get count() { return S.length; }, get current() { return cur; },
+    go: i => go(i), duration: i => S[i].duration || ends[i] || 4000, hasDemo: i => !!S[i].demo,
+    demo: i => { const c = eng.ctx; return c && c.i === i && S[i].demo ? Promise.resolve(S[i].demo(c)) : Promise.resolve(); },
+    demoDuration: i => S[i].demoDuration || 0,
+    autoplay: (hold = o.hold || 2200) => runAuto(0, hold, false),
+    pause: () => eng.stopAuto(), play: () => { if (!auto) runAuto(cur, o.hold || 2200, autoMode === 'loop'); },
+  };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  updPP();
+  fontsReady().then(() => { go(+(QS.get('step') || 1) - 1); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; });
+    else if (autoMode && !RM && !QS.has('step') && !QS.has('static')) runAuto(0, o.hold || 2200, autoMode === 'loop'); });
+  return api;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* Time an average reader needs for a caption on a phone: about 230 ms a word plus a second to find it. */
+const readMs = cap => 1000 + 230 * String(cap || '').split(/\s+/).filter(Boolean).length;
+
+/* ---------- player: a scrubbable timeline. frame(t, s) must draw the scene for time t from scratch,
+   so pause, scrub, replay and recording all work for free. Chapters label stretches of the timeline. */
+function player(o) {
+  const fr = frame(o.root, o, 'player'), eng = { gen: 0, timers: [], root: fr.root, act: null, cap: fr.cap, touched: false };
+  const CH = o.chapters || [{ at: 0, title: o.title || '', cap: '' }], D = o.duration;
+  const range = fr.$('.kx-scrub input'), pp = fr.pp, tm = fr.$('.kx-time');
+  if (range) range.max = D; let t = 0, playing = false, last = 0, chap = -1, speed = o.speed || 1, holdUntil = 0, heldAt = -1, restart = false;
+  const looping = () => (o.loop != null ? !!o.loop : fr.ctl === 'none') && !REC;   // a player without controls starts again after a pause
+  // Pause at the end of each part while playing, long enough to read its caption, unless chapterHold is 0.
+  const holdFor = k => o.chapterHold === 0 ? 0 : typeof o.chapterHold === 'number' ? o.chapterHold : Math.min(8000, Math.max(1500, readMs(CH[k].cap) - (end(k) - CH[k].at) / speed));
+  const SPEEDS = o.speeds === false || fr.ctl !== 'full' ? null : o.speeds || [0.5, 1, 2];
+  if (SPEEDS) { const sb = document.createElement('button'); sb.type = 'button'; sb.className = 'kx-speed'; const lab = () => { sb.textContent = speed + '×'; sb.setAttribute('aria-label', 'Playback speed ' + speed + ' times'); };
+    lab(); sb.onclick = () => { speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length] || 1; lab(); eng.touched = true; }; tm.after(sb); }
+  fr.svg.innerHTML = (typeof o.scene === 'function' ? o.scene(K) : o.scene || '') + '<g class="kx-dyn"></g>';
+  const ctx = makeCtx(eng, fr.svg, 0); reveal(fr.svg);
+  if (fr.dots) CH.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'kx-dot'; b.setAttribute('aria-label', 'Go to ' + (c.title || 'part ' + (i + 1))); b.innerHTML = '<i></i>'; b.onclick = () => { seek(c.at); play(); }; fr.dots.appendChild(b); });
+  fixCaptionHeight(fr, CH.map(c => c.cap || '')); fontsReady().then(() => fixCaptionHeight(fr, CH.map(c => c.cap || '')));
+  const chapterAt = x => { let k = 0; CH.forEach((c, i) => { if (x >= c.at) k = i; }); return k; };
+  function setChapter(k) { if (k === chap) return; chap = k; const c = CH[k]; fr.title.textContent = c.title || ''; fr.count.textContent = `Part ${k + 1} of ${CH.length}`; fr.cap.textContent = c.cap || ''; fr.svg.setAttribute('aria-label', (c.title || '') + '. ' + (c.alt || c.cap || '')); if (fr.dots) [...fr.dots.children].forEach((d, j) => j === k ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current')); fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !c.keys || c.keys.includes(e.dataset.l) ? '' : 'none'); }
+  function logTo(x) { if (!fr.log || !o.log) return; const from = o.logScope === 'all' ? -Infinity : CH[chapterAt(x)].at; const L = o.log.filter(e => e.t <= x && e.t >= from).slice(-6), key = L.map(e => e.t + e.text).join('|'); if (key === fr.log.dataset.k) return; fr.log.dataset.k = key; fr.log.innerHTML = L.map(e => `<div style="color:${col(e.c || 'mut')}">${esc(e.text)}</div>`).join(''); }
+  function draw() { if (range) range.value = t; if (tm) tm.textContent = o.clock ? o.clock(t) : (t / 1000).toFixed(1) + ' s'; setChapter(chapterAt(t)); logTo(t); o.frame(t, ctx); }
+  function seek(x) { t = clamp(x, 0, D); holdUntil = 0; heldAt = -1; restart = false; draw(); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n;
+    if (n < holdUntil) { requestAnimationFrame(tick); return; }
+    if (restart) { restart = false; t = 0; heldAt = -1; draw(); requestAnimationFrame(tick); return; }
+    const k = chapterAt(t), nt = t + dt * speed;
+    if (k < CH.length - 1 && k !== heldAt && nt >= end(k) && t < end(k)) { const h = holdFor(k); heldAt = k; if (h > 0) { t = end(k) - 1; holdUntil = n + h; draw(); requestAnimationFrame(tick); return; } }
+    t = nt; if (t >= D) { t = D; if (looping()) { holdUntil = n + Math.max(holdFor(CH.length - 1), o.hold || 2000); restart = true; } else { playing = false; updPP(); } } draw(); if (playing) requestAnimationFrame(tick); }
+  function play() { if (t >= D) t = 0; if (RM) { seek(end(chapterAt(t)) - 1); return; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }  // reduced motion: jump to the end state of the chapter instead of animating
+  function pause() { playing = false; holdUntil = 0; if (restart) { restart = false; t = 0; heldAt = -1; draw(); } updPP(); }
+  const PPL = [ICON.pause + 'Pause', ICON.replay + 'Replay', ICON.play + 'Play'];
+  function updPP() { pp.innerHTML = playing ? PPL[0] : t >= D ? PPL[1] : PPL[2]; pp.setAttribute('aria-label', playing ? 'Pause' : t >= D ? 'Replay' : 'Play'); }
+  pp.onclick = () => playing ? pause() : play();
+  if (range) range.oninput = () => { pause(); seek(+range.value); };
+  if (fr.back) fr.back.onclick = () => { seek(CH[Math.max(0, chapterAt(t) - (t - CH[chapterAt(t)].at < 600 ? 1 : 0))].at); };
+  if (fr.next) { fr.next.innerHTML = 'Next' + ICON.right; fr.next.onclick = () => { const k = chapterAt(t); seek(k < CH.length - 1 ? CH[k + 1].at : 0); play(); }; }
+  fontsReady().then(() => fixWidth(pp, PPL));
+  const end = i => i < CH.length - 1 ? CH[i + 1].at : D;
+  const api = { kind: 'player', root: fr.root, get count() { return CH.length; }, get current() { return chapterAt(t); }, go: i => { seek(CH[i].at); play(); }, duration: i => (end(i) - CH[i].at) / speed, hasDemo: () => false, demo: () => Promise.resolve(), seek, play, pause, get time() { return t; },
+    async autoplay() { seek(0); play(); while (t < D) await sleep(200); await sleep(o.hold || 2000); } };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { const k = +(QS.get('step') || 1) - 1; seek(CH[Math.min(k, CH.length - 1)].at); updPP(); if (o.autoplay !== false && !QS.has('static')) play(); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  return api;
+}
+
+/* ---------- figure: one standalone view, no steps. It sits in an article like a picture: a drawing that
+   reveals once, optional live controls in the action row (sliders, toggles, taps on the drawing), and an
+   optional looping animation, frame(t, s), drawn from the time t like a player, with a pause button.
+   Use it when the idea fits one view; use a stepper when the reader must see it built up. */
+function figure(o) {
+  const fr = frame(o.root, o, 'figure'), eng = { gen: 0, timers: [], root: fr.root, act: fr.act, cap: fr.cap, touched: false };
+  const D = o.frame ? o.duration || 4000 : 0, loop = o.loop !== false && !REC;
+  let t = 0, playing = false, last = 0, holdUntil = 0, restart = false, ctx = null, revealEnd = 0, offscreen = false;
+  if (!o.title) fr.head.remove(); else fr.title.textContent = o.title || '';
+  if (o.actHeight) fr.act.style.minHeight = o.actHeight + 'px';
+  fr.root.querySelectorAll('[data-l]').forEach(e => e.style.display = !o.keys || o.keys.includes(e.dataset.l) ? '' : 'none');
+  const caps = [o.cap || ''].concat(o.extraCaptions || []);
+  fr.cap.textContent = o.cap || '';   // an empty caption is hidden, and a hidden one cannot be measured
+  if (caps.some(Boolean)) { const fit = () => { if (fr.cap.clientWidth) fixCaptionHeight(fr, caps); }; fit(); fontsReady().then(fit); addEventListener('resize', fit); }
+  const PPL = [ICON.pause + 'Pause', ICON.replay + 'Replay', ICON.play + 'Play'];
+  function updPP() { if (!fr.pp) return; fr.pp.innerHTML = playing ? PPL[0] : t >= D && !loop ? PPL[1] : PPL[2]; fr.pp.setAttribute('aria-label', playing ? 'Pause the animation' : 'Play the animation'); }
+  function drawAt(x) { t = clamp(x, 0, D); o.frame(t, ctx); }
+  function tick(n) { if (!playing) return; const dt = Math.min(64, n - last); last = n;
+    if (n < holdUntil) { requestAnimationFrame(tick); return; }
+    if (restart) { restart = false; drawAt(0); requestAnimationFrame(tick); return; }
+    const nt = t + dt * (o.speed || 1);
+    if (nt >= D) { drawAt(D); if (loop) { holdUntil = n + (o.hold == null ? 1200 : o.hold); restart = true; } else { playing = false; updPP(); return; } }
+    else drawAt(nt);
+    requestAnimationFrame(tick); }
+  function play() { if (!o.frame || RM) return; if (t >= D) { t = 0; restart = false; } playing = true; last = performance.now(); updPP(); requestAnimationFrame(tick); }
+  function pause() { playing = false; holdUntil = 0; updPP(); }
+  function build() {
+    eng.gen++; eng.timers.forEach(clearTimeout); eng.timers = []; eng.touched = false; playing = false; restart = false; holdUntil = 0;
+    fr.svg.innerHTML = (typeof o.draw === 'function' ? o.draw(K) : o.draw || '') + '<g class="kx-dyn"></g>';
+    fr.act.innerHTML = ''; fr.cap.textContent = o.cap || '';
+    fr.svg.setAttribute('aria-label', (o.title ? o.title + '. ' : '') + (o.alt || o.cap || ''));
+    if (o.reveal === false) { finish(fr.svg); revealEnd = 0; } else revealEnd = reveal(fr.svg);
+    ctx = makeCtx(eng, fr.svg, 0); eng.ctx = ctx;
+    if (o.start) o.start(ctx);
+    eng.inDemo = false;
+    if (o.demo && o.idleDemo && !REC) ctx.at(o.idleDemo, () => { if (!eng.touched) { eng.inDemo = true; Promise.resolve(o.demo(ctx)).finally(() => { eng.inDemo = false; }); } });
+    if (o.frame) { drawAt(RM ? (o.still == null ? D : o.still) : 0); if (!RM && o.autoplay !== false && !QS.has('static') && !offscreen) play(); else updPP(); }
+  }
+  if (fr.pp) { fr.pp.onclick = () => playing ? pause() : play(); fontsReady().then(() => fixWidth(fr.pp, PPL)); }
+  if (fr.replay) fr.replay.onclick = () => build();
+  // stop a looping animation while it is scrolled out of view, and start it again when it comes back
+  if (o.frame && !RM && 'IntersectionObserver' in window) new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting && playing) { offscreen = true; pause(); } else if (e.isIntersecting && offscreen) { offscreen = false; play(); } })).observe(fr.root);
+  const api = {
+    kind: 'figure', root: fr.root, count: 1, current: 0, go: () => build(),
+    duration: () => o.frame ? D / (o.speed || 1) : o.duration || revealEnd + 600, hasDemo: () => !!o.demo,
+    demo: () => ctx && o.demo ? Promise.resolve(o.demo(ctx)) : Promise.resolve(), demoDuration: () => o.demoDuration || 0,
+    play, pause, seek: x => { pause(); drawAt(x); updPP(); }, get time() { return t; },
+    async autoplay() { build(); await sleep(260 + api.duration()); if (o.demo) { await Promise.race([api.demo(), sleep(o.demoDuration || 12000)]); await sleep(600); } await sleep(o.hold || 2000); },
+  };
+  let resolveReady; api.ready = new Promise(r => resolveReady = r);
+  ALL.push(api); window.EXPLAINER = window.EXPLAINER || api;
+  fontsReady().then(() => { build(); resolveReady(); if (REC && ALL[0] === api) api.autoplay().then(() => { api.done = true; }); });
+  return api;
+}
+
+/* ---------- controls for explorables */
+let uid = 0;
+function slider(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent; const id = 'kx' + (++uid);
+  const w = document.createElement('div'); w.className = 'kx-ctl';
+  w.innerHTML = `<label for="${id}">${esc(o.label)}</label><output for="${id}"></output><input id="${id}" type="range" min="${o.min}" max="${o.max}" step="${o.step || 'any'}" value="${o.value}">`;
+  parent.appendChild(w); const inp = w.querySelector('input'), out = w.querySelector('output'), fmt = o.fmt || (v => v);
+  const upd = () => { out.textContent = fmt(+inp.value); o.oninput && o.oninput(+inp.value); };
+  inp.addEventListener('input', upd); upd();
+  return { el: w, input: inp, get value() { return +inp.value; }, set(v) { inp.value = v; upd(); } };
+}
+function toggle(parent, o) {
+  parent = typeof parent === 'string' ? document.querySelector(parent) : parent;
+  const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-pressed', o.value ? 'true' : 'false'); b.innerHTML = esc(o.label); parent.appendChild(b);
+  b.onclick = () => { const v = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', v); o.onchange && o.onchange(v); };
+  return b;
+}
+
+/* ---------- layout and number helpers */
+const grid = (j, o) => ({ x: (o.x0 || 0) + (j % o.cols) * (o.gap || 10), y: (o.y0 || 0) + Math.floor(j / o.cols) * (o.gapY || o.gap || 10) });
+function scale(d0, d1, r0, r1) { const s = v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0); s.invert = p => d0 + (p - r0) / (r1 - r0 || 1) * (d1 - d0); return s; }
+const fmt = {
+  int: v => Math.round(v).toLocaleString('en-US'),
+  pct: (v, d = 0) => (v * 100).toFixed(d) + '%',
+  usd: (v, d = 2) => (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(d),
+  sec: v => v < 60 ? v.toFixed(0) + ' s' : Math.floor(v / 60) + ' min ' + Math.round(v % 60) + ' s',
+};
+/* Wilson score interval for k successes in n trials (95% by default). Use it whenever a small sample is shown as a rate. */
+function wilson(k, n, z = 1.96) { if (!n) return [0, 1]; const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [Math.max(0, (c - m) / d), Math.min(1, (c + m) / d)]; }
+
+const K = { version: '1.2', NS, RM, C, STYLES, useStyle, resolveStyle, rng, ease, clamp, lerp, f, esc, col, line, rect, ellipse, arrow, poly, curve, P, T, F, reveal, finish, mk, ICON, stepper, player, figure, slider, toggle, grid, scale, fmt, wilson, sleep };
+window.K = K;
+})();
+</script>
+<script>
+/* ===== SCENE: everything below is the explainer itself. Edit freely. ===== */
+const {P, T, F, line, rect, ellipse, arrow, curve, poly, C, scale, fmt, clamp} = K;
+// DATA is data.json, embedded unchanged by scaffold.py --data. Show numbers computed from it.
+const DATA = {"rows":[["springs","opus55","rust",1.223734],["springs","opus55","cpp",1.0],["springs","opus55","go",1.970084],["springs","opus55","csharp",1.711218],["springs","opus55","java",3.412232],["springs","opus55","js",4.501246],["springs","opus55","fast",6.160627],["springs","opus55","plain",168.091276],["springs","opus55","simple",209.214199],["wordpairs","opus55","rust",1.0],["wordpairs","opus55","cpp",1.413144],["wordpairs","opus55","go",1.714216],["wordpairs","opus55","csharp",1.452916],["wordpairs","opus55","java",2.132792],["wordpairs","opus55","js",3.280537],["wordpairs","opus55","fast",8.17714],["wordpairs","opus55","plain",30.240718],["wordpairs","opus55","simple",145.848358],["ledger","opus55","rust",1.991788],["ledger","opus55","cpp",1.0],["ledger","opus55","go",1.014367],["ledger","opus55","csharp",1.125831],["ledger","opus55","java",1.625957],["ledger","opus55","js",2.399471],["ledger","opus55","fast",13.993278],["ledger","opus55","plain",9.559273],["ledger","opus55","simple",13.851202],["logscan","opus55","rust",1.241676],["logscan","opus55","cpp",1.129469],["logscan","opus55","go",1.0],["logscan","opus55","csharp",1.160243],["logscan","opus55","java",1.844524],["logscan","opus55","js",1.89858],["logscan","opus55","fast",11.429496],["logscan","opus55","plain",11.248482],["logscan","opus55","simple",18.192636],["routes","opus55","rust",1.0],["routes","opus55","cpp",1.480576],["routes","opus55","go",1.714208],["routes","opus55","csharp",1.95068],["routes","opus55","java",3.201955],["routes","opus55","js",2.806187],["routes","opus55","fast",8.732251],["routes","opus55","plain",32.93283],["routes","opus55","simple",76.948251],["align","opus55","rust",1.0],["align","opus55","cpp",1.01717],["align","opus55","go",1.575532],["align","opus55","csharp",2.339341],["align","opus55","java",4.598315],["align","opus55","js",3.800206],["align","opus55","fast",13.717138],["align","opus55","plain",170.271052],["align","opus55","simple",293.864503],["heat","opus55","rust",1.0],["heat","opus55","cpp",1.034914],["heat","opus55","go",1.358982],["heat","opus55","csharp",2.372201],["heat","opus55","java",5.533088],["heat","opus55","js",5.812769],["heat","opus55","fast",9.295355],["heat","opus55","plain",12.565289],["heat","opus55","simple",424.714016],["walkers","opus55","rust",1.729438],["walkers","opus55","cpp",1.0],["walkers","opus55","go",1.046554],["walkers","opus55","csharp",1.919556],["walkers","opus55","java",2.544109],["walkers","opus55","js",8.032251],["walkers","opus55","fast",10.969938],["walkers","opus55","plain",40.662239],["walkers","opus55","simple",322.660812],["springs","sonnet","rust",1.218213],["springs","sonnet","cpp",1.0],["springs","sonnet","go",1.40223],["springs","sonnet","csharp",2.221779],["springs","sonnet","java",3.424375],["springs","sonnet","js",3.294861],["springs","sonnet","fast",5.45155],["springs","sonnet","plain",170.655115],["springs","sonnet","simple",182.2915],["wordpairs","sonnet","rust",1.178757],["wordpairs","sonnet","cpp",1.0],["wordpairs","sonnet","go",1.446625],["wordpairs","sonnet","csharp",1.490541],["wordpairs","sonnet","java",1.541562],["wordpairs","sonnet","js",1.700299],["wordpairs","sonnet","fast",2.704425],["wordpairs","sonnet","plain",16.266226],["wordpairs","sonnet","simple",53.301499],["ledger","sonnet","rust",1.24531],["ledger","sonnet","cpp",1.069902],["ledger","sonnet","go",1.0],["ledger","sonnet","csharp",1.202709],["ledger","sonnet","java",1.392406],["ledger","sonnet","js",1.650175],["ledger","sonnet","fast",13.289371],["ledger","sonnet","plain",10.017258],["ledger","sonnet","simple",14.216987],["logscan","sonnet","rust",1.035631],["logscan","sonnet","cpp",1.0],["logscan","sonnet","go",1.010028],["logscan","sonnet","csharp",1.375449],["logscan","sonnet","java",1.816802],["logscan","sonnet","js",1.710245],["logscan","sonnet","fast",7.836638],["logscan","sonnet","plain",7.34936],["logscan","sonnet","simple",14.502426],["routes","sonnet","rust",1.0],["routes","sonnet","cpp",1.924524],["routes","sonnet","go",2.884851],["routes","sonnet","csharp",3.455105],["routes","sonnet","java",3.811908],["routes","sonnet","js",4.131672],["routes","sonnet","fast",15.642371],["routes","sonnet","plain",45.515862],["routes","sonnet","simple",72.526265],["align","sonnet","rust",1.0],["align","sonnet","cpp",1.353022],["align","sonnet","go",1.566979],["align","sonnet","csharp",5.53944],["align","sonnet","java",4.159302],["align","sonnet","js",8.336974],["align","sonnet","fast",9.624719],["align","sonnet","plain",114.683936],["align","sonnet","simple",203.611654],["heat","sonnet","rust",1.076635],["heat","sonnet","cpp",1.0],["heat","sonnet","go",2.16309],["heat","sonnet","csharp",2.065834],["heat","sonnet","java",4.10106],["heat","sonnet","js",4.374067],["heat","sonnet","fast",7.761096],["heat","sonnet","plain",17.161875],["heat","sonnet","simple",312.361593],["walkers","sonnet","rust",1.452183],["walkers","sonnet","cpp",1.0],["walkers","sonnet","go",1.463635],["walkers","sonnet","csharp",1.68009],["walkers","sonnet","java",3.135197],["walkers","sonnet","js",5.543118],["walkers","sonnet","fast",11.699736],["walkers","sonnet","plain",216.124131],["walkers","sonnet","simple",280.379629],["springs","haiku","rust",1.0],["springs","haiku","cpp",1.093504],["springs","haiku","go",1.645094],["springs","haiku","csharp",2.404886],["springs","haiku","java",2.977387],["springs","haiku","js",3.526781],["springs","haiku","fast",4.336607],["springs","haiku","plain",141.718428],["springs","haiku","simple",147.294185],["wordpairs","haiku","rust",1.0],["wordpairs","haiku","cpp",2.745672],["wordpairs","haiku","go",3.014218],["wordpairs","haiku","csharp",3.107244],["wordpairs","haiku","java",3.75117],["wordpairs","haiku","js",4.271253],["wordpairs","haiku","fast",10.740489],["wordpairs","haiku","plain",16.799726],["wordpairs","haiku","simple",77.537983],["ledger","haiku","rust",1.419139],["ledger","haiku","cpp",1.089255],["ledger","haiku","go",1.0],["ledger","haiku","csharp",1.125193],["ledger","haiku","java",1.414032],["ledger","haiku","js",2.171065],["ledger","haiku","fast",27.468009],["ledger","haiku","plain",8.792819],["ledger","haiku","simple",11.540645],["logscan","haiku","rust",1.191184],["logscan","haiku","cpp",1.017859],["logscan","haiku","go",1.0],["logscan","haiku","csharp",1.239113],["logscan","haiku","java",1.665171],["logscan","haiku","js",2.496607],["logscan","haiku","fast",28.562481],["logscan","haiku","plain",9.315471],["logscan","haiku","simple",13.558518],["routes","haiku","rust",1.0],["routes","haiku","cpp",1.20699],["routes","haiku","go",1.526781],["routes","haiku","csharp",2.912792],["routes","haiku","java",3.024002],["routes","haiku","js",3.472782],["routes","haiku","fast",10.250146],["routes","haiku","plain",43.885871],["routes","haiku","simple",72.099808],["align","haiku","rust",1.362297],["align","haiku","cpp",1.011112],["align","haiku","go",1.0],["align","haiku","csharp",2.087154],["align","haiku","java",2.38439],["align","haiku","js",2.593638],["align","haiku","fast",9.619164],["align","haiku","plain",128.437278],["align","haiku","simple",135.274911],["heat","haiku","rust",1.0],["heat","haiku","cpp",1.375493],["heat","haiku","go",1.864892],["heat","haiku","csharp",2.719212],["heat","haiku","java",5.515372],["heat","haiku","js",5.677632],["heat","haiku","fast",8.95061],["heat","haiku","plain",25.563782],["heat","haiku","simple",385.265969],["walkers","haiku","rust",1.026456],["walkers","haiku","cpp",1.0],["walkers","haiku","go",1.013538],["walkers","haiku","csharp",1.537075],["walkers","haiku","java",1.937817],["walkers","haiku","js",5.022349],["walkers","haiku","fast",27.407123],["walkers","haiku","plain",198.422268],["walkers","haiku","simple",196.880215],["springs","sol61","rust",1.0],["springs","sol61","cpp",1.089946],["springs","sol61","go",1.272067],["springs","sol61","csharp",1.619271],["springs","sol61","java",3.019745],["springs","sol61","js",2.954879],["springs","sol61","fast",4.763368],["springs","sol61","plain",103.383532],["springs","sol61","simple",143.055546],["wordpairs","sol61","rust",1.0],["wordpairs","sol61","cpp",1.012296],["wordpairs","sol61","go",1.333808],["wordpairs","sol61","csharp",1.296184],["wordpairs","sol61","java",1.707711],["wordpairs","sol61","js",1.879268],["wordpairs","sol61","fast",7.905383],["wordpairs","sol61","plain",17.213611],["wordpairs","sol61","simple",72.562901],["ledger","sol61","rust",1.598254],["ledger","sol61","cpp",1.0],["ledger","sol61","go",1.229325],["ledger","sol61","csharp",1.756075],["ledger","sol61","java",2.038973],["ledger","sol61","js",4.692826],["ledger","sol61","fast",8.394726],["ledger","sol61","plain",8.184243],["ledger","sol61","simple",12.894205],["logscan","sol61","rust",1.159535],["logscan","sol61","cpp",1.229478],["logscan","sol61","go",1.0],["logscan","sol61","csharp",1.758189],["logscan","sol61","java",2.345929],["logscan","sol61","js",2.14643],["logscan","sol61","fast",9.127354],["logscan","sol61","plain",7.919484],["logscan","sol61","simple",14.498554],["routes","sol61","rust",1.000788],["routes","sol61","cpp",1.0],["routes","sol61","go",1.295117],["routes","sol61","csharp",1.444566],["routes","sol61","java",2.111646],["routes","sol61","js",2.385994],["routes","sol61","fast",6.116095],["routes","sol61","plain",20.576257],["routes","sol61","simple",54.913313],["align","sol61","rust",1.0],["align","sol61","cpp",1.687441],["align","sol61","go",1.721958],["align","sol61","csharp",2.226074],["align","sol61","java",3.52881],["align","sol61","js",3.64202],["align","sol61","fast",8.74721],["align","sol61","plain",29.685604],["align","sol61","simple",182.051989],["heat","sol61","rust",1.0],["heat","sol61","cpp",1.126064],["heat","sol61","go",1.856748],["heat","sol61","csharp",2.331253],["heat","sol61","java",4.92997],["heat","sol61","js",4.751105],["heat","sol61","fast",8.360627],["heat","sol61","plain",128.84255],["heat","sol61","simple",323.515512],["walkers","sol61","rust",1.0],["walkers","sol61","cpp",1.224224],["walkers","sol61","go",1.363899],["walkers","sol61","csharp",1.744412],["walkers","sol61","java",2.042151],["walkers","sol61","js",4.077572],["walkers","sol61","fast",7.790584],["walkers","sol61","plain",56.667147],["walkers","sol61","simple",218.167089],["springs","terra","rust",1.0],["springs","terra","cpp",1.403983],["springs","terra","go",1.737604],["springs","terra","csharp",3.365272],["springs","terra","java",3.578392],["springs","terra","js",4.050819],["springs","terra","fast",7.136105],["springs","terra","plain",159.626415],["springs","terra","simple",182.395579],["wordpairs","terra","rust",1.0],["wordpairs","terra","cpp",2.600616],["wordpairs","terra","go",1.317379],["wordpairs","terra","csharp",1.702033],["wordpairs","terra","java",1.688038],["wordpairs","terra","js",1.811664],["wordpairs","terra","fast",5.119439],["wordpairs","terra","plain",9.077849],["wordpairs","terra","simple",27.337629],["ledger","terra","rust",1.0],["ledger","terra","cpp",8.382342],["ledger","terra","go",5.288024],["ledger","terra","csharp",3.058434],["ledger","terra","java",3.007314],["ledger","terra","js",7.462489],["ledger","terra","fast",5.686274],["ledger","terra","plain",5.787436],["ledger","terra","simple",7.559787],["logscan","terra","rust",1.0],["logscan","terra","cpp",1.015279],["logscan","terra","go",2.246613],["logscan","terra","csharp",2.095017],["logscan","terra","java",2.001869],["logscan","terra","js",1.647915],["logscan","terra","fast",2.908631],["logscan","terra","plain",2.724035],["logscan","terra","simple",4.101664],["routes","terra","rust",1.0],["routes","terra","cpp",1.524598],["routes","terra","go",1.744578],["routes","terra","csharp",1.814216],["routes","terra","java",2.085122],["routes","terra","js",2.067961],["routes","terra","fast",20.026613],["routes","terra","plain",18.026013],["routes","terra","simple",17.985545],["align","terra","rust",1.0],["align","terra","cpp",4.98334],["align","terra","go",1.10891],["align","terra","csharp",3.239042],["align","terra","java",2.294413],["align","terra","js",5.458675],["align","terra","fast",11.519253],["align","terra","plain",87.315213],["align","terra","simple",112.974208],["heat","terra","rust",2.460605],["heat","terra","cpp",1.0],["heat","terra","go",1.385583],["heat","terra","csharp",2.452307],["heat","terra","java",3.289377],["heat","terra","js",3.335808],["heat","terra","fast",6.180961],["heat","terra","plain",107.621413],["heat","terra","simple",249.171877],["walkers","terra","rust",1.042138],["walkers","terra","cpp",1.0],["walkers","terra","go",1.144462],["walkers","terra","csharp",1.317445],["walkers","terra","java",1.566916],["walkers","terra","js",3.392404],["walkers","terra","fast",5.426952],["walkers","terra","plain",69.684492],["walkers","terra","simple",72.343268],["springs","wonder-full","rust",1.0],["springs","wonder-full","cpp",1.247386],["springs","wonder-full","go",1.484363],["springs","wonder-full","csharp",2.471543],["springs","wonder-full","java",3.219593],["springs","wonder-full","js",3.128141],["springs","wonder-full","fast",5.151886],["springs","wonder-full","plain",145.342401],["springs","wonder-full","simple",205.263676],["wordpairs","wonder-full","rust",4.002921],["wordpairs","wonder-full","cpp",1.0],["wordpairs","wonder-full","go",1.554603],["wordpairs","wonder-full","csharp",1.428342],["wordpairs","wonder-full","java",1.867902],["wordpairs","wonder-full","js",1.750819],["wordpairs","wonder-full","fast",7.934968],["wordpairs","wonder-full","plain",21.244434],["wordpairs","wonder-full","simple",90.27609],["ledger","wonder-full","rust",1.199063],["ledger","wonder-full","cpp",1.0],["ledger","wonder-full","go",1.238325],["ledger","wonder-full","csharp",1.311178],["ledger","wonder-full","java",1.358215],["ledger","wonder-full","js",1.611031],["ledger","wonder-full","fast",6.635884],["ledger","wonder-full","plain",8.547315],["ledger","wonder-full","simple",9.33368],["logscan","wonder-full","rust",1.094705],["logscan","wonder-full","cpp",1.062609],["logscan","wonder-full","go",1.0],["logscan","wonder-full","csharp",1.542002],["logscan","wonder-full","java",1.659067],["logscan","wonder-full","js",4.15902],["logscan","wonder-full","fast",8.600224],["logscan","wonder-full","plain",7.790283],["logscan","wonder-full","simple",13.417785],["routes","wonder-full","rust",1.06316],["routes","wonder-full","cpp",1.0],["routes","wonder-full","go",1.07859],["routes","wonder-full","csharp",1.664869],["routes","wonder-full","java",2.202523],["routes","wonder-full","js",2.036876],["routes","wonder-full","fast",12.346207],["routes","wonder-full","plain",17.166794],["routes","wonder-full","simple",46.592699],["align","wonder-full","rust",1.812459],["align","wonder-full","cpp",1.0],["align","wonder-full","go",1.201228],["align","wonder-full","csharp",1.996937],["align","wonder-full","java",5.259521],["align","wonder-full","js",3.410851],["align","wonder-full","fast",8.969568],["align","wonder-full","plain",82.479304],["align","wonder-full","simple",153.203588],["heat","wonder-full","rust",1.0],["heat","wonder-full","cpp",1.016025],["heat","wonder-full","go",1.211072],["heat","wonder-full","csharp",1.616251],["heat","wonder-full","java",3.097256],["heat","wonder-full","js",2.717507],["heat","wonder-full","fast",5.677916],["heat","wonder-full","plain",12.195269],["heat","wonder-full","simple",195.108885],["walkers","wonder-full","rust",1.0],["walkers","wonder-full","cpp",1.66178],["walkers","wonder-full","go",1.738237],["walkers","wonder-full","csharp",3.085136],["walkers","wonder-full","java",5.60722],["walkers","wonder-full","js",12.153445],["walkers","wonder-full","fast",27.606413],["walkers","wonder-full","plain",124.43042],["walkers","wonder-full","simple",517.02644],["springs","wonder","rust",1.0],["springs","wonder","cpp",1.213226],["springs","wonder","go",1.250445],["springs","wonder","csharp",1.973983],["springs","wonder","java",2.716605],["springs","wonder","js",2.840619],["springs","wonder","fast",4.042962],["springs","wonder","plain",104.117193],["springs","wonder","simple",170.23038],["wordpairs","wonder","rust",1.0],["wordpairs","wonder","cpp",1.136737],["wordpairs","wonder","go",1.088097],["wordpairs","wonder","csharp",1.259162],["wordpairs","wonder","java",1.234229],["wordpairs","wonder","js",1.465522],["wordpairs","wonder","fast",1.877475],["wordpairs","wonder","plain",6.665508],["wordpairs","wonder","simple",26.683736],["ledger","wonder","rust",1.558408],["ledger","wonder","cpp",1.0],["ledger","wonder","go",1.120558],["ledger","wonder","csharp",1.40982],["ledger","wonder","java",1.374757],["ledger","wonder","js",1.818427],["ledger","wonder","fast",7.573823],["ledger","wonder","plain",7.241425],["ledger","wonder","simple",9.410714],["logscan","wonder","rust",1.294054],["logscan","wonder","cpp",1.263389],["logscan","wonder","go",1.0],["logscan","wonder","csharp",1.273795],["logscan","wonder","java",1.982423],["logscan","wonder","js",3.048934],["logscan","wonder","fast",7.822236],["logscan","wonder","plain",7.794517],["logscan","wonder","simple",13.042366],["routes","wonder","rust",1.047762],["routes","wonder","cpp",1.052706],["routes","wonder","go",1.0],["routes","wonder","csharp",1.384047],["routes","wonder","java",2.209711],["routes","wonder","js",2.009872],["routes","wonder","fast",14.440153],["routes","wonder","plain",23.232528],["routes","wonder","simple",57.466105],["align","wonder","rust",1.0],["align","wonder","cpp",1.356956],["align","wonder","go",1.369917],["align","wonder","csharp",3.824109],["align","wonder","java",6.235467],["align","wonder","js",5.921565],["align","wonder","fast",12.58853],["align","wonder","plain",121.699999],["align","wonder","simple",149.304047],["heat","wonder","rust",1.051959],["heat","wonder","cpp",1.0],["heat","wonder","go",1.647636],["heat","wonder","csharp",2.277854],["heat","wonder","java",3.380459],["heat","wonder","js",3.369005],["heat","wonder","fast",5.762373],["heat","wonder","plain",13.224525],["heat","wonder","simple",238.391423],["walkers","wonder","rust",3.364223],["walkers","wonder","cpp",1.291403],["walkers","wonder","go",1.0],["walkers","wonder","csharp",2.260424],["walkers","wonder","java",2.268956],["walkers","wonder","js",7.968609],["walkers","wonder","fast",18.809767],["walkers","wonder","plain",170.945314],["walkers","wonder","simple",203.870962],["springs","deepseek","rust",1.3631],["springs","deepseek","cpp",1.0],["springs","deepseek","go",1.190639],["springs","deepseek","csharp",1.469358],["springs","deepseek","java",2.085511],["springs","deepseek","js",2.635961],["springs","deepseek","fast",4.245412],["springs","deepseek","plain",93.246664],["springs","deepseek","simple",140.093861],["wordpairs","deepseek","rust",1.155688],["wordpairs","deepseek","cpp",1.0],["wordpairs","deepseek","go",1.155776],["wordpairs","deepseek","csharp",1.353838],["wordpairs","deepseek","java",1.659863],["wordpairs","deepseek","js",1.850325],["wordpairs","deepseek","fast",7.496366],["wordpairs","deepseek","plain",23.578311],["wordpairs","deepseek","simple",79.956616],["ledger","deepseek","rust",1.0],["ledger","deepseek","cpp",1.153437],["ledger","deepseek","go",1.591781],["ledger","deepseek","csharp",1.627151],["ledger","deepseek","java",1.60282],["ledger","deepseek","js",2.433135],["ledger","deepseek","fast",9.250186],["ledger","deepseek","plain",10.786938],["ledger","deepseek","simple",12.067894],["logscan","deepseek","rust",1.372589],["logscan","deepseek","cpp",1.093208],["logscan","deepseek","go",1.0],["logscan","deepseek","csharp",1.37139],["logscan","deepseek","java",1.941981],["logscan","deepseek","js",2.277413],["logscan","deepseek","fast",10.033946],["logscan","deepseek","plain",9.27431],["logscan","deepseek","simple",14.788679],["routes","deepseek","rust",1.0],["routes","deepseek","cpp",1.044324],["routes","deepseek","go",1.284421],["routes","deepseek","csharp",1.893556],["routes","deepseek","java",2.445206],["routes","deepseek","js",2.97927],["routes","deepseek","fast",14.939886],["routes","deepseek","plain",33.52023],["routes","deepseek","simple",68.898791],["align","deepseek","rust",1.091931],["align","deepseek","cpp",1.0],["align","deepseek","go",1.180243],["align","deepseek","csharp",2.065197],["align","deepseek","java",4.512918],["align","deepseek","js",3.196563],["align","deepseek","fast",11.841115],["align","deepseek","plain",106.389916],["align","deepseek","simple",158.497763],["heat","deepseek","rust",1.0],["heat","deepseek","cpp",1.18634],["heat","deepseek","go",1.612521],["heat","deepseek","csharp",2.564161],["heat","deepseek","java",4.056658],["heat","deepseek","js",4.021875],["heat","deepseek","fast",7.263948],["heat","deepseek","plain",16.286108],["heat","deepseek","simple",301.449176],["walkers","deepseek","rust",2.442271],["walkers","deepseek","cpp",1.0],["walkers","deepseek","go",1.141712],["walkers","deepseek","csharp",2.475149],["walkers","deepseek","java",2.390345],["walkers","deepseek","js",8.60911],["walkers","deepseek","fast",7.170591],["walkers","deepseek","plain",42.170783],["walkers","deepseek","simple",159.78504],["springs","glm","rust",1.0],["springs","glm","cpp",1.165155],["springs","glm","go",1.657277],["springs","glm","csharp",3.077234],["springs","glm","java",3.458775],["springs","glm","js",3.792988],["springs","glm","fast",4.90632],["springs","glm","plain",122.350699],["springs","glm","simple",183.659007],["wordpairs","glm","rust",1.359197],["wordpairs","glm","cpp",1.0],["wordpairs","glm","go",1.389113],["wordpairs","glm","csharp",1.462863],["wordpairs","glm","java",1.470107],["wordpairs","glm","js",2.096324],["wordpairs","glm","fast",4.417532],["wordpairs","glm","plain",5.90261],["wordpairs","glm","simple",32.60484],["ledger","glm","rust",1.007023],["ledger","glm","cpp",1.0],["ledger","glm","go",1.408478],["ledger","glm","csharp",1.55599],["ledger","glm","java",1.537397],["ledger","glm","js",2.263253],["ledger","glm","fast",9.807737],["ledger","glm","plain",7.891605],["ledger","glm","simple",10.391141],["logscan","glm","rust",1.369166],["logscan","glm","cpp",1.081176],["logscan","glm","go",1.0],["logscan","glm","csharp",1.713108],["logscan","glm","java",1.884591],["logscan","glm","js",1.796948],["logscan","glm","fast",7.900439],["logscan","glm","plain",10.004589],["logscan","glm","simple",13.245579],["routes","glm","rust",1.445651],["routes","glm","cpp",1.0],["routes","glm","go",1.234897],["routes","glm","csharp",1.501699],["routes","glm","java",1.675229],["routes","glm","js",1.69454],["routes","glm","fast",6.255841],["routes","glm","plain",24.480314],["routes","glm","simple",44.023226],["align","glm","rust",1.0],["align","glm","cpp",1.094792],["align","glm","go",1.907205],["align","glm","csharp",2.949499],["align","glm","java",3.676438],["align","glm","js",3.791399],["align","glm","fast",7.706513],["align","glm","plain",107.509596],["align","glm","simple",129.297897],["heat","glm","rust",1.0],["heat","glm","cpp",1.54341],["heat","glm","go",1.966225],["heat","glm","csharp",3.304614],["heat","glm","java",4.021844],["heat","glm","js",4.062141],["heat","glm","fast",8.380802],["heat","glm","plain",182.111485],["heat","glm","simple",293.512467],["walkers","glm","rust",3.691505],["walkers","glm","cpp",1.0],["walkers","glm","go",1.304564],["walkers","glm","csharp",2.195175],["walkers","glm","java",2.819764],["walkers","glm","js",11.184493],["walkers","glm","fast",17.137599],["walkers","glm","plain",81.97485],["walkers","glm","simple",243.108363],["springs","nemotron","rust",1.219885],["springs","nemotron","cpp",1.089537],["springs","nemotron","go",1.0],["springs","nemotron","csharp",1.531954],["springs","nemotron","java",3.248245],["springs","nemotron","js",2.126146],["springs","nemotron","fast",4.703528],["springs","nemotron","plain",101.396715],["springs","nemotron","simple",114.356708],["wordpairs","nemotron","rust",1.0],["wordpairs","nemotron","cpp",1.340994],["wordpairs","nemotron","go",1.041929],["wordpairs","nemotron","csharp",1.446682],["wordpairs","nemotron","java",1.641709],["wordpairs","nemotron","js",4.069779],["wordpairs","nemotron","fast",9.980809],["wordpairs","nemotron","plain",25.140291],["wordpairs","nemotron","simple",45.306796],["ledger","nemotron","rust",1.310169],["ledger","nemotron","cpp",1.0],["ledger","nemotron","go",2.148398],["ledger","nemotron","csharp",2.773528],["ledger","nemotron","java",3.242844],["ledger","nemotron","js",9.150987],["ledger","nemotron","fast",9.023872],["ledger","nemotron","plain",11.659479],["ledger","nemotron","simple",11.212722],["logscan","nemotron","rust",1.297399],["logscan","nemotron","cpp",1.0],["logscan","nemotron","go",1.031928],["logscan","nemotron","csharp",1.57996],["logscan","nemotron","java",3.38344],["logscan","nemotron","js",3.828147],["logscan","nemotron","fast",7.740109],["logscan","nemotron","plain",10.279688],["logscan","nemotron","simple",12.049631],["routes","nemotron","rust",1.702883],["routes","nemotron","cpp",1.0],["routes","nemotron","go",1.434168],["routes","nemotron","csharp",1.73971],["routes","nemotron","java",1.551258],["routes","nemotron","js",2.49452],["routes","nemotron","fast",11.877527],["routes","nemotron","plain",27.990616],["routes","nemotron","simple",27.799614],["align","nemotron","rust",1.457426],["align","nemotron","cpp",1.0],["align","nemotron","go",1.852703],["align","nemotron","csharp",3.088895],["align","nemotron","java",3.884941],["align","nemotron","js",4.02193],["align","nemotron","fast",13.080447],["align","nemotron","plain",91.714556],["align","nemotron","simple",111.796057],["heat","nemotron","rust",1.70405],["heat","nemotron","cpp",1.75431],["heat","nemotron","go",1.0],["heat","nemotron","csharp",1.568741],["heat","nemotron","java",2.180625],["heat","nemotron","js",2.024238],["heat","nemotron","fast",16.892907],["heat","nemotron","plain",58.466026],["heat","nemotron","simple",150.420163],["walkers","nemotron","rust",2.319634],["walkers","nemotron","cpp",1.0],["walkers","nemotron","go",2.561509],["walkers","nemotron","csharp",2.486137],["walkers","nemotron","java",3.065404],["walkers","nemotron","js",8.514484],["walkers","nemotron","fast",111.969195],["walkers","nemotron","plain",155.885224],["walkers","nemotron","simple",152.967734],["springs","sol61-oneshot","rust",1.0],["springs","sol61-oneshot","cpp",1.003081],["springs","sol61-oneshot","go",1.646839],["springs","sol61-oneshot","csharp",1.502014],["springs","sol61-oneshot","java",2.61287],["springs","sol61-oneshot","js",3.087121],["springs","sol61-oneshot","fast",4.653875],["springs","sol61-oneshot","plain",118.968902],["springs","sol61-oneshot","simple",130.339718],["wordpairs","sol61-oneshot","rust",1.063486],["wordpairs","sol61-oneshot","cpp",1.0],["wordpairs","sol61-oneshot","go",4.762195],["wordpairs","sol61-oneshot","csharp",3.199943],["wordpairs","sol61-oneshot","java",4.674022],["wordpairs","sol61-oneshot","js",3.979825],["wordpairs","sol61-oneshot","fast",7.319968],["wordpairs","sol61-oneshot","plain",15.173521],["wordpairs","sol61-oneshot","simple",74.559467],["ledger","sol61-oneshot","rust",1.067762],["ledger","sol61-oneshot","cpp",1.0],["ledger","sol61-oneshot","go",1.433752],["ledger","sol61-oneshot","csharp",2.321799],["ledger","sol61-oneshot","java",2.609564],["ledger","sol61-oneshot","js",3.286391],["ledger","sol61-oneshot","fast",10.929103],["ledger","sol61-oneshot","plain",10.662823],["ledger","sol61-oneshot","simple",14.270379],["logscan","sol61-oneshot","rust",1.662023],["logscan","sol61-oneshot","cpp",1.050547],["logscan","sol61-oneshot","go",1.0],["logscan","sol61-oneshot","csharp",1.637166],["logscan","sol61-oneshot","java",2.137134],["logscan","sol61-oneshot","js",3.321125],["logscan","sol61-oneshot","fast",9.883273],["logscan","sol61-oneshot","plain",8.918817],["logscan","sol61-oneshot","simple",15.584562],["routes","sol61-oneshot","rust",1.116379],["routes","sol61-oneshot","cpp",1.0],["routes","sol61-oneshot","go",1.095942],["routes","sol61-oneshot","csharp",1.139558],["routes","sol61-oneshot","java",1.574859],["routes","sol61-oneshot","js",1.777109],["routes","sol61-oneshot","fast",23.223151],["routes","sol61-oneshot","plain",18.138757],["routes","sol61-oneshot","simple",47.048069],["align","sol61-oneshot","rust",2.254452],["align","sol61-oneshot","cpp",1.0],["align","sol61-oneshot","go",1.13187],["align","sol61-oneshot","csharp",4.609007],["align","sol61-oneshot","java",3.879492],["align","sol61-oneshot","js",5.668846],["align","sol61-oneshot","fast",6.240469],["align","sol61-oneshot","plain",23.016715],["align","sol61-oneshot","simple",140.755483],["heat","sol61-oneshot","rust",1.0],["heat","sol61-oneshot","cpp",1.266664],["heat","sol61-oneshot","go",1.348778],["heat","sol61-oneshot","csharp",1.71172],["heat","sol61-oneshot","java",3.356115],["heat","sol61-oneshot","js",3.492817],["heat","sol61-oneshot","fast",7.365992],["heat","sol61-oneshot","plain",15.644059],["heat","sol61-oneshot","simple",247.807651],["walkers","sol61-oneshot","rust",2.069746],["walkers","sol61-oneshot","cpp",1.000074],["walkers","sol61-oneshot","go",1.0],["walkers","sol61-oneshot","csharp",1.389732],["walkers","sol61-oneshot","java",1.676413],["walkers","sol61-oneshot","js",1.56237],["walkers","sol61-oneshot","fast",7.01399],["walkers","sol61-oneshot","plain",47.028907],["walkers","sol61-oneshot","simple",166.432562],["springs","astra-oneshot","rust",1.004009],["springs","astra-oneshot","cpp",1.0],["springs","astra-oneshot","go",1.757497],["springs","astra-oneshot","csharp",1.682894],["springs","astra-oneshot","java",2.867615],["springs","astra-oneshot","js",3.425091],["springs","astra-oneshot","fast",5.078918],["springs","astra-oneshot","plain",117.457381],["springs","astra-oneshot","simple",137.044003],["wordpairs","astra-oneshot","rust",1.0],["wordpairs","astra-oneshot","cpp",1.070484],["wordpairs","astra-oneshot","go",4.405224],["wordpairs","astra-oneshot","csharp",2.957267],["wordpairs","astra-oneshot","java",4.289522],["wordpairs","astra-oneshot","js",4.09074],["wordpairs","astra-oneshot","fast",4.858799],["wordpairs","astra-oneshot","plain",15.030137],["wordpairs","astra-oneshot","simple",71.054874],["ledger","astra-oneshot","rust",1.026804],["ledger","astra-oneshot","cpp",1.199373],["ledger","astra-oneshot","go",1.0],["ledger","astra-oneshot","csharp",1.946127],["ledger","astra-oneshot","java",2.236224],["ledger","astra-oneshot","js",3.014487],["ledger","astra-oneshot","fast",8.95105],["ledger","astra-oneshot","plain",8.334025],["ledger","astra-oneshot","simple",11.91471],["logscan","astra-oneshot","rust",1.496087],["logscan","astra-oneshot","cpp",1.027181],["logscan","astra-oneshot","go",1.0],["logscan","astra-oneshot","csharp",1.453776],["logscan","astra-oneshot","java",1.985139],["logscan","astra-oneshot","js",3.794507],["logscan","astra-oneshot","fast",8.744426],["logscan","astra-oneshot","plain",9.232671],["logscan","astra-oneshot","simple",14.783987],["routes","astra-oneshot","rust",1.138949],["routes","astra-oneshot","cpp",1.0],["routes","astra-oneshot","go",1.158506],["routes","astra-oneshot","csharp",1.252151],["routes","astra-oneshot","java",1.856248],["routes","astra-oneshot","js",1.819004],["routes","astra-oneshot","fast",25.139481],["routes","astra-oneshot","plain",21.390874],["routes","astra-oneshot","simple",48.427879],["align","astra-oneshot","rust",2.007465],["align","astra-oneshot","cpp",1.0],["align","astra-oneshot","go",1.273872],["align","astra-oneshot","csharp",3.123156],["align","astra-oneshot","java",3.566957],["align","astra-oneshot","js",3.881889],["align","astra-oneshot","fast",5.635261],["align","astra-oneshot","plain",49.905619],["align","astra-oneshot","simple",125.840574],["heat","astra-oneshot","rust",1.0],["heat","astra-oneshot","cpp",1.535513],["heat","astra-oneshot","go",1.90372],["heat","astra-oneshot","csharp",2.313701],["heat","astra-oneshot","java",4.903446],["heat","astra-oneshot","js",4.436892],["heat","astra-oneshot","fast",10.252155],["heat","astra-oneshot","plain",16.616223],["heat","astra-oneshot","simple",324.53936],["walkers","astra-oneshot","rust",1.166645],["walkers","astra-oneshot","cpp",1.0],["walkers","astra-oneshot","go",1.057094],["walkers","astra-oneshot","csharp",1.497257],["walkers","astra-oneshot","java",2.26271],["walkers","astra-oneshot","js",7.649309],["walkers","astra-oneshot","fast",6.251431],["walkers","astra-oneshot","plain",138.194745],["walkers","astra-oneshot","simple",190.493584],["springs","fable-oneshot","rust",1.028577],["springs","fable-oneshot","cpp",1.0],["springs","fable-oneshot","go",1.789584],["springs","fable-oneshot","csharp",1.735851],["springs","fable-oneshot","java",3.373749],["springs","fable-oneshot","js",3.38553],["springs","fable-oneshot","fast",6.134484],["springs","fable-oneshot","plain",132.843416],["springs","fable-oneshot","simple",183.085441],["wordpairs","fable-oneshot","rust",1.163442],["wordpairs","fable-oneshot","cpp",1.0],["wordpairs","fable-oneshot","go",1.546347],["wordpairs","fable-oneshot","csharp",1.668916],["wordpairs","fable-oneshot","java",3.104207],["wordpairs","fable-oneshot","js",3.172126],["wordpairs","fable-oneshot","fast",6.240775],["wordpairs","fable-oneshot","plain",38.831187],["wordpairs","fable-oneshot","simple",177.712321],["ledger","fable-oneshot","rust",1.0],["ledger","fable-oneshot","cpp",1.31835],["ledger","fable-oneshot","go",1.529139],["ledger","fable-oneshot","csharp",1.275213],["ledger","fable-oneshot","java",2.21301],["ledger","fable-oneshot","js",1.903864],["ledger","fable-oneshot","fast",13.827363],["ledger","fable-oneshot","plain",13.747159],["ledger","fable-oneshot","simple",21.046181],["logscan","fable-oneshot","rust",1.436915],["logscan","fable-oneshot","cpp",1.0],["logscan","fable-oneshot","go",1.509109],["logscan","fable-oneshot","csharp",1.330471],["logscan","fable-oneshot","java",2.57178],["logscan","fable-oneshot","js",2.784506],["logscan","fable-oneshot","fast",13.979802],["logscan","fable-oneshot","plain",13.356908],["logscan","fable-oneshot","simple",28.97762],["routes","fable-oneshot","rust",1.0],["routes","fable-oneshot","cpp",1.033337],["routes","fable-oneshot","go",1.084486],["routes","fable-oneshot","csharp",1.449308],["routes","fable-oneshot","java",2.639514],["routes","fable-oneshot","js",2.648795],["routes","fable-oneshot","fast",12.990405],["routes","fable-oneshot","plain",28.168092],["routes","fable-oneshot","simple",68.909144],["align","fable-oneshot","rust",1.016641],["align","fable-oneshot","cpp",1.0],["align","fable-oneshot","go",1.40101],["align","fable-oneshot","csharp",2.273478],["align","fable-oneshot","java",5.044892],["align","fable-oneshot","js",9.533829],["align","fable-oneshot","fast",11.206982],["align","fable-oneshot","plain",125.160399],["align","fable-oneshot","simple",270.962618],["heat","fable-oneshot","rust",1.099749],["heat","fable-oneshot","cpp",1.0],["heat","fable-oneshot","go",1.460919],["heat","fable-oneshot","csharp",2.393508],["heat","fable-oneshot","java",6.440238],["heat","fable-oneshot","js",5.55541],["heat","fable-oneshot","fast",10.404195],["heat","fable-oneshot","plain",14.915108],["heat","fable-oneshot","simple",390.068058],["walkers","fable-oneshot","rust",1.0],["walkers","fable-oneshot","cpp",1.00962],["walkers","fable-oneshot","go",1.210323],["walkers","fable-oneshot","csharp",1.805069],["walkers","fable-oneshot","java",3.343619],["walkers","fable-oneshot","js",6.935398],["walkers","fable-oneshot","fast",10.90986],["walkers","fable-oneshot","plain",38.669903],["walkers","fable-oneshot","simple",330.888579]]};
+
+// Source: notebooks/39-rust-vs-python/data/results/derived/relative_speed_pairs.csv
+// rows = [task, author, language, ratio]; ratio = a version's median run time / the same model's fastest version of that task (1 = fastest).
+// 13 authors x 8 tasks x 9 languages = 936 rows.
+const LANGS = [['rust','Rust'],['cpp','C++'],['go','Go'],['csharp','C#'],['java','Java'],['js','JavaScript'],['fast','Python + NumPy'],['plain','Python'],['simple','Basic Python']];
+// Authors timed on 2026-11-12: their times were divided by the drift factor 0.938 (data/PROTOCOL.md, "Drift between the two timing days").
+const DAY2 = new Set(['sol61','sol61-oneshot','astra-oneshot','fable-oneshot']);
+const DRIFT = 0.938;
+// Task descriptions: README "The eight tasks" table.
+const TASKS = [['springs','a floating-point loop'],['wordpairs','counting word pairs in text'],['ledger','parsing JSON records'],['logscan','parsing a web log'],['routes','shortest paths in a road graph'],['align','a dynamic-programming table'],['heat','grid arithmetic'],['walkers','a parallel simulation']];
+const gm = a => Math.exp(a.reduce((s, v) => s + Math.log(v), 0) / a.length);
+const fx = v => (v < 10 ? v.toFixed(1) : Math.round(v)) + '\u00d7';
+const authorsAll = [...new Set(DATA.rows.map(r => r[1]))];
+function select(task) { return LANGS.map(([k, name]) => {
+  const rs = DATA.rows.filter(r => r[2] === k && (task === 'all' || r[0] === task));
+  return {k, name, rs, n: rs.length, g: gm(rs.map(r => r[3])), fastest: rs.filter(r => r[3] === 1).length};
+}); }
+const XMAX = 600, X = (() => { const f = K.scale(0, Math.log10(XMAX), 118, 366); return v => f(Math.log10(v)); })();
+const ROW0 = 108, RH = 35, ROWS = LANGS.length;
+let cur = 'all';
+function capFor(task) {
+  const d = select(task), by = Object.fromEntries(d.map(x => [x.k, x]));
+  const n = d[0].n, desc = task === 'all' ? 'Across all 8 tasks' : 'Task ' + task + ' (' + TASKS.find(t => t[0] === task)[1] + ')';
+  const top = d.filter(x => x.k !== 'simple').sort((a, b) => a.g - b.g).slice(0, 3);
+  return `${desc}: ${top.map(x => x.name).join(', ')} average ${fx(top[0].g)} to ${fx(top[2].g)} the fastest version; Python ${fx(by.plain.g)}. Dots per row: ${n} (${task === 'all' ? '13 models x 8 tasks' : '13 models, 1 task'}). White bar = geometric mean.`;
+}
+const extra = ['all', ...TASKS.map(t => t[0])].map(capFor);
+K.figure({
+  root: '#x', style: 'chalkboard', viewBox: [380, 470],
+  title: 'How much slower than the fastest version?',
+  cap: capFor('all'), extraCaptions: extra,
+  alt: 'Dot chart on a log scale. Each dot is one AI model\'s program in one language, as a multiple of that model\'s fastest version of the same task. Rust, C++ and Go average about 1.2 to 1.4 times the fastest; Python about 31 times. A row of buttons switches between all tasks and each of eight tasks.',
+  legend: [{key: 'a', label: 'One model, one task, timed 2026-11-08', color: 'fill.blue'}, {key: 'b', label: 'Same, timed 2026-11-12 (times \u00f7 0.938)', color: 'fill.amber'}],
+  actHeight: 150,
+  draw: () => {
+    let m = T(12, 30, '1\u00d7 = that model\'s fastest version of the task', {h: 1, z: 17, a: 'start', c: 'mut'});
+    m += T(12, 52, 'Each dot = one program. Right = slower.', {z: 14, a: 'start', c: 'mut', t: 200});
+    [1, 2, 10, 100].forEach(v => {
+      m += `<line x1="${X(v)}" x2="${X(v)}" y1="${ROW0 - 8}" y2="${ROW0 + ROWS * RH - 6}" stroke="${C.line}" stroke-width="${v === 1 ? 1.6 : 1}" stroke-dasharray="${v === 1 ? '' : '3 4'}"/>`;
+      m += T(X(v), ROW0 - 18, v + '\u00d7', {z: 14, a: 'middle', c: 'mut', t: 300});
+    });
+    LANGS.forEach(([k, name], i) => { m += T(12, ROW0 + i * RH + 18, name, {z: 15, a: 'start', t: 400 + i * 40}); });
+    return m + '<g id="rows"></g><g id="vals"></g>';
+  },
+  start(s) {
+    const rows = s.q('#rows'), vals = s.q('#vals');
+    const paint = task => {
+      cur = task; const d = select(task); rows.innerHTML = ''; vals.innerHTML = '';
+      d.forEach((x, i) => {
+        const yc = ROW0 + i * RH + 12, rnd = K.rng(100 + i);
+        const dots = Math.min(x.n, 104) > 20 ? 1.9 : 3.2;
+        x.rs.forEach(r => {
+          const cx = X(r[3]), cy = yc + (rnd() - .5) * (x.n > 20 ? 20 : 14), day2 = DAY2.has(r[1]);
+          const c = document.createElementNS(K.NS, 'circle');
+          c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', dots);
+          if (day2) { c.setAttribute('fill', 'none'); c.setAttribute('stroke', C.fill.amber); c.setAttribute('stroke-width', 1.3); }
+          else { c.setAttribute('fill', C.fill.blue); c.setAttribute('fill-opacity', .7); }
+          rows.appendChild(c);
+        });
+        const mk = document.createElementNS(K.NS, 'line');
+        mk.setAttribute('x1', X(x.g)); mk.setAttribute('x2', X(x.g)); mk.setAttribute('y1', yc - 12); mk.setAttribute('y2', yc + 12);
+        mk.setAttribute('stroke', C.ink); mk.setAttribute('stroke-width', 3); rows.appendChild(mk);
+        const t = document.createElementNS(K.NS, 'text'), right = X(x.g) < 250;
+        t.setAttribute('x', X(x.g) + (right ? 7 : -7)); t.setAttribute('y', yc + 22 > ROW0 + ROWS * RH ? yc + 5 : yc - 13);
+        t.setAttribute('text-anchor', right ? 'start' : 'end'); t.setAttribute('fill', C.ink); t.setAttribute('font-size', 14);
+        t.setAttribute('font-weight', 700); t.textContent = fx(x.g); vals.appendChild(t);
+      });
+      s.cap(capFor(task));
+      [...s.act.querySelectorAll('button')].forEach(b => { b.className = b.dataset.t === task ? 'pri' : ''; b.setAttribute('aria-pressed', b.dataset.t === task); });
+    };
+    [['all', 'All tasks'], ...TASKS.map(t => [t[0], t[0]])].forEach(([k, label]) => {
+      const b = s.btn('', label, () => paint(k)); b.dataset.t = k;
+    });
+    paint(cur);
+  },
+  demo: async s => { for (const k of ['heat', 'wordpairs', 'all']) { const b = s.q ? s.act.querySelector(`[data-t="${k}"]`) : null; if (b) s.tap(b); await s.wait(1800); } },
+  idleDemo: 7000, demoDuration: 5600, duration: 1800,
+});
+</script>
+</body></html>
